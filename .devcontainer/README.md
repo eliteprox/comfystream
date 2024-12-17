@@ -3,6 +3,11 @@
 ```
 cd .devcontainer && docker build -f Dockerfile.base -t comfystream:base .
  ```
+### Create folders for models and custom nodes
+```
+mkdir -p $HOME/ComfyUI--models
+mkdir -p $HOME/ComfyUI--nodes
+```
 Re-load `comfystream` folder as a devcontainer in vscode
 
 ### Install Nodes
