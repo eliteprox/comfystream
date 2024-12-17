@@ -1,7 +1,7 @@
 # FROM comfyui-builder:custom-nodes
 FROM comfystream:base
 
-WORKDIR /comfystream
+WORKDIR /workspaces/comfystream
 RUN eval "$(/root/miniconda3/bin/conda shell.bash hook)"
 ENV PATH="/root/miniconda3/bin:${PATH}"
 RUN conda init bash
