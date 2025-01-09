@@ -14,7 +14,7 @@ def install_custom_node_req(workspace: str):
 
         if os.path.isdir(folder_path) and os.path.isfile(req_file):
             logger.info(f"Installing requirements for {folder}...")
-            subprocess.run(["pip", "install", "-r", req_file], check=True)
+            subprocess.run(["pip", "install", "-r", req_file, "--no-build-isolation"], check=True)
 
 
 if __name__ == "__main__":
