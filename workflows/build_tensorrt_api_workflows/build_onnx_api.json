@@ -1,0 +1,26 @@
+{
+  "12": {
+    "inputs": {
+      "unet_name": "dreamshaper_8_dmd_1kstep.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "13": {
+    "inputs": {
+      "output_folder": "/workspace/ComfyUI/models/onnx",
+      "filename": "dreamshaper8_fp8.onnx",
+      "model": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ONNX_FP8_EXPORT",
+    "_meta": {
+      "title": "ONNX FP8 Export"
+    }
+  }
+}

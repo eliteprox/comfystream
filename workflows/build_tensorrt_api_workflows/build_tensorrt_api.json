@@ -1,0 +1,43 @@
+{
+  "14": {
+    "inputs": {
+      "unet_name": "dreamshaper_8_dmd_1kstep.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "15": {
+    "inputs": {
+      "model_name": "dreamshaper8_fp8.onnx"
+    },
+    "class_type": "ONNXModelSelector",
+    "_meta": {
+      "title": "Select ONNX Model"
+    }
+  },
+  "16": {
+    "inputs": {
+      "filename_prefix": "tensorrt/static-dreamshaper8",
+      "batch_size_opt": 1,
+      "height_opt": 512,
+      "width_opt": 512,
+      "context_opt": 1,
+      "num_video_frames": 14,
+      "onnx_model_path": [
+        "15",
+        0
+      ],
+      "model": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "STATIC_TRT_MODEL_CONVERSION",
+    "_meta": {
+      "title": "STATIC_TRT_MODEL_CONVERSION"
+    }
+  }
+}
