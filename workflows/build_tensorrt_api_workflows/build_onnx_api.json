@@ -1,7 +1,29 @@
 {
+  "1": {
+    "inputs": {
+      "image": "sampled_frame.jpg",
+      "upload": "image"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "3": {
+    "inputs": {
+      "images": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
   "12": {
     "inputs": {
-      "unet_name": "dreamshaper_8_dmd_1kstep.safetensors",
+      "unet_name": "{model_name}.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -12,7 +34,7 @@
   "13": {
     "inputs": {
       "output_folder": "/workspace/ComfyUI/models/onnx",
-      "filename": "dreamshaper8_fp8.onnx",
+      "filename": "{model_name}.onnx",
       "model": [
         "12",
         0

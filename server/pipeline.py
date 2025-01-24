@@ -16,6 +16,9 @@ class Pipeline:
     def set_prompt(self, prompt: Dict[Any, Any]):
         self.client.set_prompt(prompt)
 
+    async def execute_prompt(self, prompt: Dict[Any, Any]):
+        return await self.client.execute_prompt(prompt)
+
     async def warm(self):
         frame = torch.randn(1, 512, 512, 3)
 
@@ -48,3 +51,4 @@ class Pipeline:
         """Get information about all nodes in the current prompt including metadata."""
         nodes_info = await self.client.get_available_nodes()
         return nodes_info
+
