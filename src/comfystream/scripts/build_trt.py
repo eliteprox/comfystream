@@ -5,21 +5,24 @@ import sys
 import time
 import argparse
 
+# Reccomended running from comfystream conda environment
+# in devcontainer from the workspace/ directory, or comfystream/ if you've checked out the repo
+# $> conda activate comfystream
+# $> python src/comfystream/scripts/build_trt.py --model /ComfyUI/models/checkpoints/SD1.5/dreamshaper-8.safetensors --out-engine /ComfyUI/output/tensorrt
+
+# Paths path explicitly to use the downloaded comfyUI installation
+# instead of comfystream's site-packages hiddenswitch/comfyui
 COMFYUI_DIR = "/ComfyUI"
 COMFYSTREAM_DIR = "/workspace/"
 
-# Insert it at the front of sys.path so it is found before site-packages
 if COMFYUI_DIR not in sys.path:
     sys.path.insert(0, COMFYUI_DIR)
 if COMFYSTREAM_DIR not in sys.path:
     sys.path.insert(0, COMFYSTREAM_DIR)
 
-# Path to the comfy/ directory
-comfy_dirs = ["/workspace/ComfyUI/","/workspace/ComfyUI/comfy","/workspace/ComfyUI/comfy_extras"]
-
+comfy_dirs = ["../ComfyUI/","../workspace/ComfyUI/comfy","../workspace/ComfyUI/comfy_extras"]
 
 for comfy_dir in comfy_dirs:
-# Path to the __init__.py file
     init_file_path = os.path.join(comfy_dir, "__init__.py")
 
     # Check if the __init__.py file exists
@@ -37,10 +40,6 @@ for comfy_dir in comfy_dirs:
 import comfy
 import comfy.model_management
 
-
-# Import from sibling modules in this package
-# Make sure there's an __init__.py in onnx_utils and models so these are importable.
-# from ComfyUI.custom_nodes.ComfyUI_TensorRT.models.baseline import TRTModelUtil
 from ComfyUI.custom_nodes.ComfyUI_TensorRT.models.supported_models import detect_version_from_model, get_helper_from_model
 from ComfyUI.custom_nodes.ComfyUI_TensorRT.onnx_utils.export import export_onnx
 from ComfyUI.custom_nodes.ComfyUI_TensorRT.tensorrt_diffusion_model import TRTDiffusionBackbone
@@ -78,18 +77,6 @@ def parse_args():
         type=int,
         default=512,
         help="Height in pixels for the exported model (default 1024)",
-    )
-    parser.add_argument(
-        "--context",
-        type=int,
-        default=1,
-        help="Multiplier for context tokens (default 1). If your model is conditional, it usually doubles the batch internally.",
-    )
-    parser.add_argument(
-        "--num-video-frames",
-        type=int,
-        default=14,
-        help="Applies only if the model is 'SVD_img2vid'. Default 14.",
     )
     parser.add_argument(
         "--fp8",
@@ -136,25 +123,12 @@ def build_static_trt_engine(
 
     # 1) Load model in GPU:
     comfy.model_management.unload_all_models()
-    # load_models_gpu() can accept a list of names/paths. 
     weight_dtype = "fp8_optimizations"
     model_options = {}
-    if weight_dtype == "fp8_e4m3fn":
-        model_options["dtype"] = torch.float8_e4m3fn
-    elif weight_dtype == "fp8_e4m3fn_fast":
-        model_options["dtype"] = torch.float8_e4m3fn
-        model_options["fp8_optimizations"] = True
-    elif weight_dtype == "fp8_e5m2":
-        model_options["dtype"] = torch.float8_e5m2
 
-    # loaded_model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
-    # if loaded_model is None:
-    #     raise ValueError("Failed to load the UNet model. Check the model file and loading logic.")
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # loaded_model.model.to(device)
     loaded_model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
     if loaded_model is None:
-        raise ValueError("Failed to load the model. Check the model file and loading logic.")
+        raise ValueError("Failed to load model.")
         
     comfy.model_management.load_models_gpu(
         [loaded_model],
@@ -197,6 +171,7 @@ def build_static_trt_engine(
     output_trt_engine = generate_trt_filename(engine_out_path, filename_prefix, model_version, batch_size_opt, height_opt, width_opt, is_static=True)
 
     # We'll define min/opt/max config all the same (i.e. 'static')
+    # TODO: make this configurable
     min_config = {
         "batch_size": batch_size_opt,
         "height":     height_opt,
@@ -208,8 +183,7 @@ def build_static_trt_engine(
 
     # The tensorrt_diffusion_model build() signature is typically:
     #   build(onnx_path, engine_path, timing_cache_path, opt_config, min_config, max_config)
-    # If you have a different signature, adjust accordingly.
-    # If you have a separate 'timing_cache.trt', put it next to this script or in your plugin folder:
+    # If you have a separate 'timing_cache.trt', put it next to this script:
     timing_cache_path = os.path.join(os.path.dirname(__file__), "timing_cache.trt")
 
     if verbose:
