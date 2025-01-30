@@ -22,10 +22,6 @@ if COMFYUI_DIR not in sys.path:
 if COMFYSTREAM_DIR not in sys.path:
     sys.path.insert(0, COMFYSTREAM_DIR)
 
-print("Running build_trt with Python:", sys.executable)
-print("sys.path is:", sys.path)
-
-
 comfy_dirs = [
     "/ComfyUI/",
     "/ComfyUI/comfy",
@@ -185,6 +181,9 @@ def build_static_trt_engine(
     # Generate the output filename
     filename_prefix = os.path.splitext(os.path.basename(model_path))[0]
     output_trt_engine = generate_trt_filename(engine_out_path, filename_prefix, model_version, batch_size_opt, height_opt, width_opt, is_static=True)
+
+    if not os.path.exists(engine_out_path):
+        os.makedirs(engine_out_path, exist_ok=True)
 
     # We'll define min/opt/max config all the same (i.e. 'static')
     # TODO: make this configurable
