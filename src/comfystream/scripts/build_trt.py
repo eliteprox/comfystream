@@ -8,7 +8,7 @@ import argparse
 # Reccomended running from comfystream conda environment
 # in devcontainer from the workspace/ directory, or comfystream/ if you've checked out the repo
 # $> conda activate comfystream
-# $> python src/comfystream/scripts/build_trt.py --model /ComfyUI/models/checkpoints/SD1.5/dreamshaper-8.safetensors --out-engine /ComfyUI/output/tensorrt
+# $> python src/comfystream/scripts/build_trt.py --model /ComfyUI/models/checkpoints/SD1.5/dreamshaper-8.safetensors --out-engine /ComfyUI/output/tensorrt/static-dreamshaper8_SD15_$stat-b-1-h-512-w-512_00001_.engine
 
 # Paths path explicitly to use the downloaded comfyUI installation
 # instead of comfystream's site-packages hiddenswitch/comfyui
@@ -103,13 +103,6 @@ def parse_args():
     )
     return parser.parse_args()
 
-
-def generate_trt_filename(output_dir, filename_prefix, model_version, batch_size, height, width, is_static=True):
-    """Generates a TensorRT engine filename based on model parameters."""
-    suffix = "stat" if is_static else "dyn"
-    filename = f"static-{filename_prefix}_{model_version}_${suffix}_b-{batch_size}_h-{height}_w-{width}"
-    return os.path.join(output_dir, f"{filename}_00001_.engine")
-
 def build_static_trt_engine(
     model_path: str,
     engine_out_path: str,
@@ -175,13 +168,6 @@ def build_static_trt_engine(
     model_helper  = get_helper_from_model(loaded_model)
 
     trt_model = TRTDiffusionBackbone(model_helper)
-
-    # Generate the output filename
-    # filename_prefix = os.path.splitext(os.path.basename(model_path))[0]
-    # output_trt_engine = generate_trt_filename(engine_out_path, filename_prefix, model_version, batch_size_opt, height_opt, width_opt, is_static=True)
-
-    # if not os.path.exists(engine_out_path):
-    #     os.makedirs(engine_out_path, exist_ok=True)
 
     # We'll define min/opt/max config all the same (i.e. 'static')
     # TODO: make this configurable
