@@ -183,6 +183,7 @@ async def offer(request):
         ),
     )
 
+
 async def set_prompt(request):
     pipeline = request.app["pipeline"]
 
@@ -190,6 +191,7 @@ async def set_prompt(request):
     pipeline.set_prompt(prompt)
 
     return web.Response(content_type="application/json", text="OK")
+
 
 def health(_):
     return web.Response(content_type="application/json", text="OK")

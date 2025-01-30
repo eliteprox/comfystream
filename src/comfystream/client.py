@@ -23,10 +23,6 @@ class ComfyStreamClient:
     def set_prompt(self, prompt: PromptDictInput):
         self.prompt = convert_prompt(prompt)
 
-    def execute_prompt(self, prompt: PromptDictInput):
-        """Execute the provided prompt without waiting for input tensor"""
-        return self.comfy_client.queue_prompt(prompt)
-
     async def queue_prompt(self, input: torch.Tensor) -> torch.Tensor:
         async with self._lock:
             tensor_cache.inputs.append(input)
@@ -134,5 +130,3 @@ class ComfyStreamClient:
             except Exception as e:
                 logger.error(f"Error getting node info: {str(e)}")
                 return {}
-
-
