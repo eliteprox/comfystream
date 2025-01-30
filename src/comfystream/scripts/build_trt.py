@@ -20,7 +20,22 @@ if COMFYUI_DIR not in sys.path:
 if COMFYSTREAM_DIR not in sys.path:
     sys.path.insert(0, COMFYSTREAM_DIR)
 
-comfy_dirs = ["/ComfyUI/","/ComfyUI/comfy","/ComfyUI/comfy_extras"]
+print("Running build_trt with Python:", sys.executable)
+print("sys.path is:", sys.path)
+
+
+comfy_dirs = [
+    "/ComfyUI/",
+    "/ComfyUI/comfy",
+    "/ComfyUI/comfy_extras",
+    "/ComfyUI/custom_nodes",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/models",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/models/supported_models",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/onnx_utils",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/onnx_utils/export",
+    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/tensorrt_diffusion_model",
+]
 
 for comfy_dir in comfy_dirs:
     init_file_path = os.path.join(comfy_dir, "__init__.py")
@@ -77,6 +92,12 @@ def parse_args():
         type=int,
         default=512,
         help="Height in pixels for the exported model (default 1024)",
+    )
+    parser.add_argument(
+        "--context",
+        type=int,
+        default=1,
+        help="Context multiplier for the exported model (default 1)",
     )
     parser.add_argument(
         "--fp8",
@@ -223,7 +244,6 @@ def main():
         height_opt       = args.height,
         width_opt        = args.width,
         context_opt      = args.context,
-        num_video_frames = args.num_video_frames,
         fp8              = args.fp8,
         verbose          = args.verbose
     )
