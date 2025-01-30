@@ -15,6 +15,8 @@ import argparse
 COMFYUI_DIR = "/ComfyUI"
 COMFYSTREAM_DIR = "/workspace/"
 
+os.environ["PYTHONPATH"] = COMFYUI_DIR + ":" + os.environ.get("PYTHONPATH", "")
+
 if COMFYUI_DIR not in sys.path:
     sys.path.insert(0, COMFYUI_DIR)
 if COMFYSTREAM_DIR not in sys.path:
@@ -27,14 +29,7 @@ print("sys.path is:", sys.path)
 comfy_dirs = [
     "/ComfyUI/",
     "/ComfyUI/comfy",
-    "/ComfyUI/comfy_extras",
-    "/ComfyUI/custom_nodes",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/models",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/models/supported_models",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/onnx_utils",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/onnx_utils/export",
-    "/ComfyUI/custom_nodes/ComfyUI_TensorRT/tensorrt_diffusion_model",
+    "/ComfyUI/comfy_extras"
 ]
 
 for comfy_dir in comfy_dirs:
