@@ -20,7 +20,7 @@ if COMFYUI_DIR not in sys.path:
 if COMFYSTREAM_DIR not in sys.path:
     sys.path.insert(0, COMFYSTREAM_DIR)
 
-comfy_dirs = ["../ComfyUI/","../workspace/ComfyUI/comfy","../workspace/ComfyUI/comfy_extras"]
+comfy_dirs = ["/ComfyUI/","/ComfyUI/comfy","/ComfyUI/comfy_extras"]
 
 for comfy_dir in comfy_dirs:
     init_file_path = os.path.join(comfy_dir, "__init__.py")
