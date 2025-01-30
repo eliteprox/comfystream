@@ -191,17 +191,6 @@ async def set_prompt(request):
 
     return web.Response(content_type="application/json", text="OK")
 
-
-async def run_prompt(request):
-    pipeline = request.app["pipeline"]
-    prompt = await request.json()
-    logger.debug(f"Received prompt structure: {json.dumps(prompt, indent=2)}")
-    
-    await pipeline.execute_prompt(prompt)
-    
-    return web.Response(content_type="application/json", text="OK")
-
-
 def health(_):
     return web.Response(content_type="application/json", text="OK")
 
@@ -256,7 +245,6 @@ if __name__ == "__main__":
 
     app.router.add_post("/offer", offer)
     app.router.add_post("/prompt", set_prompt)
-    app.router.add_post("/run_prompt", run_prompt)
     app.router.add_get("/", health)
 
     web.run_app(app, host=args.host, port=int(args.port))
