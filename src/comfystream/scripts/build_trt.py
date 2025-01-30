@@ -135,10 +135,8 @@ def build_static_trt_engine(
 
     # 1) Load model in GPU:
     comfy.model_management.unload_all_models()
-    weight_dtype = "fp8_optimizations"
-    model_options = {}
 
-    loaded_model = comfy.sd.load_diffusion_model(model_path, model_options=model_options)
+    loaded_model = comfy.sd.load_diffusion_model(model_path, model_options={})
     if loaded_model is None:
         raise ValueError("Failed to load model.")
         
@@ -179,11 +177,11 @@ def build_static_trt_engine(
     trt_model = TRTDiffusionBackbone(model_helper)
 
     # Generate the output filename
-    filename_prefix = os.path.splitext(os.path.basename(model_path))[0]
-    output_trt_engine = generate_trt_filename(engine_out_path, filename_prefix, model_version, batch_size_opt, height_opt, width_opt, is_static=True)
+    # filename_prefix = os.path.splitext(os.path.basename(model_path))[0]
+    # output_trt_engine = generate_trt_filename(engine_out_path, filename_prefix, model_version, batch_size_opt, height_opt, width_opt, is_static=True)
 
-    if not os.path.exists(engine_out_path):
-        os.makedirs(engine_out_path, exist_ok=True)
+    # if not os.path.exists(engine_out_path):
+    #     os.makedirs(engine_out_path, exist_ok=True)
 
     # We'll define min/opt/max config all the same (i.e. 'static')
     # TODO: make this configurable
@@ -206,7 +204,7 @@ def build_static_trt_engine(
 
     success = trt_model.build(
         onnx_path         = onnx_path,
-        engine_path       = output_trt_engine,
+        engine_path       = engine_out_path,
         timing_cache_path = timing_cache_path,
         opt_config        = opt_config,
         min_config        = min_config,
