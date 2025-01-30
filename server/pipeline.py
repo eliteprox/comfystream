@@ -48,4 +48,3 @@ class Pipeline:
         """Get information about all nodes in the current prompt including metadata."""
         nodes_info = await self.client.get_available_nodes()
         return nodes_info
-
