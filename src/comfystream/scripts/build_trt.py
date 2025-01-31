@@ -12,10 +12,13 @@ import argparse
 
 # Paths path explicitly to use the downloaded comfyUI installation on root
 ROOT_DIR="/"
+COMFYUI_DIR = "/ComfyUI"
 
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
-
+if COMFYUI_DIR not in sys.path:
+    sys.path.insert(0, COMFYUI_DIR)
+    
 comfy_dirs = [
     "/ComfyUI/",
     "/ComfyUI/comfy",
