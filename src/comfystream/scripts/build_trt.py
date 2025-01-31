@@ -10,17 +10,11 @@ import argparse
 # $> conda activate comfystream
 # $> python src/comfystream/scripts/build_trt.py --model /ComfyUI/models/checkpoints/SD1.5/dreamshaper-8.safetensors --out-engine /ComfyUI/output/tensorrt/static-dreamshaper8_SD15_$stat-b-1-h-512-w-512_00001_.engine
 
-# Paths path explicitly to use the downloaded comfyUI installation
-# instead of comfystream's site-packages hiddenswitch/comfyui
-COMFYUI_DIR = "/ComfyUI"
-COMFYSTREAM_DIR = "/workspace/"
+# Paths path explicitly to use the downloaded comfyUI installation on root
+ROOT_DIR="/"
 
-os.environ["PYTHONPATH"] = COMFYUI_DIR + ":" + os.environ.get("PYTHONPATH", "")
-
-if COMFYUI_DIR not in sys.path:
-    sys.path.insert(0, COMFYUI_DIR)
-if COMFYSTREAM_DIR not in sys.path:
-    sys.path.insert(0, COMFYSTREAM_DIR)
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
 comfy_dirs = [
     "/ComfyUI/",
