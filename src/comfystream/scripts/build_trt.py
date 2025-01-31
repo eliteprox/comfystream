@@ -182,6 +182,11 @@ def build_static_trt_engine(
     # If you have a separate 'timing_cache.trt', put it next to this script:
     timing_cache_path = os.path.join(os.path.dirname(__file__), "timing_cache.trt")
 
+    # Extract the directory from the file path and ensure it exists
+    directory = os.path.dirname(engine_out_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
     if verbose:
         print(f"[INFO] Building engine -> {engine_out_path}")
 
