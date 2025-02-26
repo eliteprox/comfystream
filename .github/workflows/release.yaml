@@ -3,7 +3,7 @@ name: Create Release Draft
 on:
   pull_request:
     types: [ closed ]
-    branches: [ main, core/* ]
+    branches: [ main, core/*, "ui/*" ]
     paths:
       - 'ui/package.json'
 
