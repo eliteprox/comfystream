@@ -8,19 +8,17 @@ import tarfile
 import tempfile
 import urllib.request
 import toml
+import pkg_resources
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def get_project_version(workspace: str) -> str:
-    """Read project version from pyproject.toml"""
-    pyproject_path = os.path.join(workspace, "pyproject.toml")
+def get_installed_version(package_name: str) -> str:
+    """Get the installed version of a package"""
     try:
-        with open(pyproject_path, "r") as f:
-            pyproject = toml.load(f)
-            return pyproject["project"]["version"]
+        return pkg_resources.get_distribution(package_name).version
     except Exception as e:
-        logger.error(f"Failed to read version from pyproject.toml: {e}")
+        logger.error(f"Failed to get installed version of {package_name}: {e}")
         return "unknown"
     
 def ensure_init_files(workspace: str):
@@ -49,9 +47,15 @@ def ensure_init_files(workspace: str):
 
 def download_and_extract_ui_files(version: str):
     """Download and extract UI files to the workspace"""
-
+    # Check that both the directory and static folder exist before listing
+    
     output_dir = os.path.join(os.getcwd(), "nodes", "web")
-    pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+    static_dir = os.path.join(output_dir, "static")
+    if os.path.exists(output_dir) and os.path.exists(static_dir) and os.listdir(static_dir):
+        logger.info(f"ComfyStream UI files already exist in {output_dir}, skipping download and extraction.")
+        return
+
+    pathlib.Path(static_dir).mkdir(parents=True, exist_ok=True)
     base_url = urllib.parse.urljoin("https://github.com/yondonfu/comfystream/releases/download/", f"v{version}/static.tar.gz")
     
     # Create a temporary directory instead of a temporary file
@@ -98,16 +102,16 @@ if __name__ == "__main__":
                 break
             current = os.path.dirname(current)
 
-    if workspace is None:
-        logger.warning("No ComfyUI workspace found. Please specify a valid workspace path to fully install")
-
-    logger.info("Downloading and extracting UI files...")
-    version = get_project_version(os.getcwd())
-    download_and_extract_ui_files(version)
-    
     if workspace is not None:
         logger.info("Ensuring __init__.py files exist in ComfyUI directories...")
         ensure_init_files(workspace)
-        logger.info("Installing custom node requirements...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "."])
+
+    current_file_directory = os.path.dirname(os.path.abspath(__file__))
+    logger.info("Installing comfystream as editable...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", current_file_directory])
+    
+    logger.info("Downloading and extracting UI files...")
+    version = get_installed_version("comfystream")
+    download_and_extract_ui_files(version)
+    
     logger.info("Installation completed successfully.")
