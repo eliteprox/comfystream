@@ -3,9 +3,9 @@ requires = ["setuptools>=64.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "comfystream"
-description = "Build Live AI Video with ComfyUI"
-version = "0.0.3"
+name = "cs-test"
+description = ""
+version = "0.0.1"
 license = { file = "LICENSE" }
 dependencies = [
     "asyncio",
@@ -20,11 +20,11 @@ dependencies = [
 dev = ["pytest"]
 
 [project.urls]
-repository = "https://github.com/yondonfu/comfystream"
+repository = "https://github.com/eliteprox/comfystream"
 
 [tool.comfy]
-PublisherId = "livepeer-comfystream"
-DisplayName = "ComfyStream"
+PublisherId = "cs-test"
+DisplayName = "cs-test"
 Icon = "https://avatars.githubusercontent.com/u/25355022?s=48&v=4" # SVG, PNG, JPG or GIF (MAX. 800x400px)
 
 [tool.setuptools]
