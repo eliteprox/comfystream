@@ -23,7 +23,7 @@ dev = ["pytest"]
 repository = "https://github.com/eliteprox/comfystream"
 
 [tool.comfy]
-PublisherId = "cs-test"
+PublisherId = "eliteprox"
 DisplayName = "cs-test"
 Icon = "https://avatars.githubusercontent.com/u/25355022?s=48&v=4" # SVG, PNG, JPG or GIF (MAX. 800x400px)
 
