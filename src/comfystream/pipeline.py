@@ -6,9 +6,9 @@ import logging
 import time
 from typing import Any, Dict, Union, List, Optional
 
-from comfystream.client import ComfyStreamClient
-from comfystream.server.utils import temporary_log_level
-from comfystream.frame_logging import log_frame_timing
+from .client import ComfyStreamClient
+from .server.utils import temporary_log_level
+from .frame_logging import log_frame_timing
 
 WARMUP_RUNS = 5
 
