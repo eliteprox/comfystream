@@ -7,3 +7,4 @@ toml
 twilio
 prometheus_client
 librosa
+mcp>=1.0.0
