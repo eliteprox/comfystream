@@ -418,6 +418,33 @@ def health(_):
     return web.Response(content_type="application/json", text="OK")
 
 
+async def get_frame(request):
+    """Get the latest processed frame from the frame buffer."""
+    try:
+        from frame_buffer import FrameBuffer
+        frame_buffer = FrameBuffer.get_instance()
+        current_frame = frame_buffer.get_current_frame()
+        
+        if current_frame is not None:
+            return web.Response(
+                body=current_frame,
+                content_type="image/jpeg"
+            )
+        else:
+            return web.Response(
+                status=404,
+                content_type="text/plain",
+                text="No frame available"
+            )
+    except Exception as e:
+        logger.error(f"Error getting frame: {e}")
+        return web.Response(
+            status=500,
+            content_type="text/plain", 
+            text="Error retrieving frame"
+        )
+
+
 async def on_startup(app: web.Application):
     if app["media_ports"]:
         patch_loop_datagram(app["media_ports"])
@@ -517,6 +544,7 @@ if __name__ == "__main__":
 
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
+    app.router.add_get("/frame", get_frame)
 
     # WebRTC signalling and control routes.
     app.router.add_post("/offer", offer)
