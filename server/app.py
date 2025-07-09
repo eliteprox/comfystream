@@ -382,6 +382,137 @@ def health(_):
     return web.Response(content_type="application/json", text="OK")
 
 
+# Trickle integration routes
+async def trickle_start_stream(request):
+    """Start a trickle stream."""
+    if "trickle_manager" not in request.app:
+        return web.Response(status=503, text="Trickle integration not available")
+    
+    try:
+        data = await request.json()
+        
+        request_id = data.get("gateway_request_id")
+        subscribe_url = data.get("subscribe_url")
+        publish_url = data.get("publish_url")
+        params = data.get("params", {})
+        
+        width = params.get("width", 512)
+        height = params.get("height", 512)
+        prompt = params.get("prompt", '{"1":{"inputs":{"images":["2",0]},"class_type":"SaveTensor"},"2":{"inputs":{},"class_type":"LoadTensor"}}')
+        
+        # Create a new pipeline for this stream
+        pipeline = Pipeline(
+            width=width,
+            height=height,
+            cwd=request.app["workspace"],
+            disable_cuda_malloc=True,
+            gpu_only=True,
+            preview_method='none'
+        )
+        
+        # Set the workflow
+        await pipeline.set_prompts([json.loads(prompt)])
+        
+        # Create the stream
+        success = await request.app["trickle_manager"].create_stream(
+            request_id, subscribe_url, publish_url, pipeline, width, height
+        )
+        
+        if success:
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps({"status": "success", "request_id": request_id})
+            )
+        else:
+            return web.Response(
+                status=400,
+                text=json.dumps({"status": "error", "message": "Failed to create stream"})
+            )
+            
+    except Exception as e:
+        logger.error(f"Error starting trickle stream: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"status": "error", "message": str(e)})
+        )
+
+
+async def trickle_stop_stream(request):
+    """Stop a trickle stream."""
+    if "trickle_manager" not in request.app:
+        return web.Response(status=503, text="Trickle integration not available")
+    
+    try:
+        request_id = request.match_info['request_id']
+        
+        success = await request.app["trickle_manager"].stop_stream(request_id)
+        
+        if success:
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps({"status": "success", "request_id": request_id})
+            )
+        else:
+            return web.Response(
+                status=404,
+                text=json.dumps({"status": "error", "message": "Stream not found"})
+            )
+            
+    except Exception as e:
+        logger.error(f"Error stopping trickle stream: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"status": "error", "message": str(e)})
+        )
+
+
+async def trickle_stream_status(request):
+    """Get trickle stream status."""
+    if "trickle_manager" not in request.app:
+        return web.Response(status=503, text="Trickle integration not available")
+    
+    try:
+        request_id = request.match_info['request_id']
+        
+        status = await request.app["trickle_manager"].get_stream_status(request_id)
+        
+        if status:
+            return web.Response(
+                content_type="application/json",
+                text=json.dumps(status)
+            )
+        else:
+            return web.Response(status=404, text="Stream not found")
+            
+    except Exception as e:
+        logger.error(f"Error getting stream status: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"status": "error", "message": str(e)})
+        )
+
+
+async def trickle_list_streams(request):
+    """List all trickle streams."""
+    if "trickle_manager" not in request.app:
+        return web.Response(status=503, text="Trickle integration not available")
+    
+    try:
+        streams = await request.app["trickle_manager"].list_streams()
+        
+        return web.Response(
+            content_type="application/json",
+            text=json.dumps(streams)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error listing streams: {e}")
+        return web.Response(
+            status=500,
+            text=json.dumps({"status": "error", "message": str(e)})
+        )
+
+
 async def on_startup(app: web.Application):
     if app["media_ports"]:
         patch_loop_datagram(app["media_ports"])
@@ -397,6 +528,13 @@ async def on_startup(app: web.Application):
     )
     app["pcs"] = set()
     app["video_tracks"] = {}
+    
+    # Initialize trickle stream manager
+    try:
+        from trickle_integration_fallback import TrickleStreamManager
+        app["trickle_manager"] = TrickleStreamManager()
+    except ImportError:
+        logger.warning("Trickle integration not available")
 
 
 async def on_shutdown(app: web.Application):
@@ -404,6 +542,10 @@ async def on_shutdown(app: web.Application):
     coros = [pc.close() for pc in pcs]
     await asyncio.gather(*coros)
     pcs.clear()
+    
+    # Cleanup trickle streams
+    if "trickle_manager" in app:
+        await app["trickle_manager"].cleanup_all()
 
 
 if __name__ == "__main__":
@@ -477,6 +619,13 @@ if __name__ == "__main__":
     # WebRTC signalling and control routes.
     app.router.add_post("/offer", offer)
     app.router.add_post("/prompt", set_prompt)
+    
+    # Trickle integration routes
+    app.router.add_post("/stream/start", trickle_start_stream)
+    app.router.add_post("/live-video-to-video", trickle_start_stream)  # Alias
+    app.router.add_post("/stream/{request_id}/stop", trickle_stop_stream)
+    app.router.add_get("/stream/{request_id}/status", trickle_stream_status)
+    app.router.add_get("/streams", trickle_list_streams)
     
     # Setup HTTP streaming routes
     setup_routes(app, cors)
