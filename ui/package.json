@@ -33,7 +33,7 @@
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.1",
     "webm-duration-fix": "^1.0.4",
-    "zod": "^3.23.8"
+    "zod": "^3.25.67"
   },
   "devDependencies": {
     "@types/node": "^20",
