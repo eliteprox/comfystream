@@ -9,7 +9,6 @@ version = "0.1.3"
 license = { file = "LICENSE" }
 dependencies = [
     "asyncio",
-    "comfyui @ git+https://github.com/hiddenswitch/ComfyUI.git@ce3583ad42c024b8f060d0002cbe20c265da6dc8",
     "aiortc",
     "aiohttp",
     "aiohttp_cors",
@@ -33,6 +32,9 @@ Icon = "https://raw.githubusercontent.com/livepeer/comfystream-docs/main/logo/ic
 [tool.setuptools]
 package-dir = {"" = "src"}
 packages = {find = {where = ["src", "nodes"]}}
+
+[tool.setuptools.package-data]
+comfystream = ["comfyui_hiddenswitch_v0.3.40/**/*"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
