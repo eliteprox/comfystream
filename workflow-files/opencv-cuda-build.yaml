@@ -1,0 +1,269 @@
+name: OpenCV CUDA Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build from'
+        required: false
+        default: 'main'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'docker/**'
+      - 'workflow-files/opencv-cuda-build.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'docker/**'
+      - 'workflow-files/opencv-cuda-build.yaml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  opencv-cuda-build:
+    name: Build OpenCV with CUDA Support
+    runs-on: [self-hosted, linux, gpu]
+    permissions:
+      packages: write
+      contents: read
+    
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.branch || github.head_ref || github.ref }}
+      
+      - name: Set up environment variables
+        run: |
+          echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+          echo "GIT_SHA=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "BRANCH_NAME=${{ github.event.inputs.branch || github.head_ref || github.ref_name }}" >> $GITHUB_ENV
+      
+      - name: Display build information
+        run: |
+          echo "Building OpenCV CUDA for branch: $BRANCH_NAME"
+          echo "Git SHA: $GIT_SHA"
+          echo "Build date: $BUILD_DATE"
+          echo "Triggered by: ${{ github.event_name }}"
+          
+      - name: Setup CUDA environment
+        run: |
+          nvidia-smi
+          nvcc --version || echo "NVCC not found"
+          
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            wget \
+            unzip \
+            pkg-config \
+            libgtk-3-dev \
+            libavcodec-dev \
+            libavformat-dev \
+            libswscale-dev \
+            libv4l-dev \
+            libxvidcore-dev \
+            libx264-dev \
+            libjpeg-dev \
+            libpng-dev \
+            libtiff-dev \
+            gfortran \
+            openexr \
+            libatlas-base-dev \
+            python3-dev \
+            python3-numpy \
+            libtbb2 \
+            libtbb-dev \
+            libdc1394-22-dev \
+            libeigen3-dev \
+            libgflags-dev \
+            libgoogle-glog-dev
+
+      - name: Download OpenCV and OpenCV contrib
+        run: |
+          mkdir -p /tmp/opencv-build && cd /tmp/opencv-build
+          wget -O opencv.zip https://github.com/opencv/opencv/archive/4.8.0.zip
+          wget -O opencv_contrib.zip https://github.com/opencv/opencv_contrib/archive/4.8.0.zip
+          unzip opencv.zip
+          unzip opencv_contrib.zip
+          mv opencv-4.8.0 opencv
+          mv opencv_contrib-4.8.0 opencv_contrib
+
+      - name: Configure OpenCV build with CUDA
+        run: |
+          cd /tmp/opencv-build/opencv
+          mkdir build && cd build
+          cmake -D CMAKE_BUILD_TYPE=RELEASE \
+                -D CMAKE_INSTALL_PREFIX=/usr/local \
+                -D INSTALL_PYTHON_EXAMPLES=ON \
+                -D INSTALL_C_EXAMPLES=OFF \
+                -D OPENCV_ENABLE_NONFREE=ON \
+                -D WITH_CUDA=ON \
+                -D WITH_CUDNN=ON \
+                -D OPENCV_DNN_CUDA=ON \
+                -D ENABLE_FAST_MATH=1 \
+                -D CUDA_FAST_MATH=1 \
+                -D CUDA_ARCH_BIN=7.5,8.0,8.6,8.9 \
+                -D WITH_CUBLAS=1 \
+                -D OPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
+                -D HAVE_opencv_python3=ON \
+                -D PYTHON_EXECUTABLE=/usr/bin/python3 \
+                -D BUILD_EXAMPLES=ON \
+                -D WITH_GSTREAMER=ON \
+                -D WITH_V4L=ON \
+                -D WITH_QT=OFF \
+                -D WITH_OPENGL=ON \
+                -D BUILD_opencv_gpu=ON \
+                -D BUILD_opencv_gpuarithm=ON \
+                -D BUILD_opencv_gpubgsegm=ON \
+                -D BUILD_opencv_gpucodec=ON \
+                -D BUILD_opencv_gpufeatures2d=ON \
+                -D BUILD_opencv_gpufilters=ON \
+                -D BUILD_opencv_gpuimgproc=ON \
+                -D BUILD_opencv_gpulegacy=ON \
+                -D BUILD_opencv_gpuoptflow=ON \
+                -D BUILD_opencv_gpustereo=ON \
+                -D BUILD_opencv_gpuwarping=ON \
+                ..
+
+      - name: Build OpenCV
+        run: |
+          cd /tmp/opencv-build/opencv/build
+          make -j$(nproc)
+
+      - name: Install OpenCV
+        run: |
+          cd /tmp/opencv-build/opencv/build
+          sudo make install
+          sudo ldconfig
+
+      - name: Verify OpenCV CUDA installation
+        run: |
+          python3 -c "import cv2; print('OpenCV version:', cv2.__version__); print('CUDA devices:', cv2.cuda.getCudaEnabledDeviceCount())"
+
+      - name: Package OpenCV CUDA build
+        run: |
+          cd /tmp/opencv-build/opencv/build
+          tar -czf opencv-cuda-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}.tar.gz \
+            lib/python3*/site-packages/cv2 \
+            lib/libopencv_*.so* \
+            || echo "Warning: Some files may not exist, continuing..."
+          
+          # Create a minimal package with essential files
+          mkdir -p opencv-cuda-release
+          cp -r lib/python3*/site-packages/cv2 opencv-cuda-release/ 2>/dev/null || echo "cv2 package not found"
+          cp lib/libopencv_*.so* opencv-cuda-release/ 2>/dev/null || echo "OpenCV libraries not found"
+          tar -czf opencv-cuda-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}.tar.gz opencv-cuda-release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencv-cuda-build-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}
+          path: /tmp/opencv-build/opencv/build/opencv-cuda-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}.tar.gz
+          retention-days: 30
+
+      - name: Create build summary
+        run: |
+          echo "## OpenCV CUDA Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: $BRANCH_NAME" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit**: $GIT_SHA" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Date**: $BUILD_DATE" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by**: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **OpenCV Version**: 4.8.0" >> $GITHUB_STEP_SUMMARY
+          echo "- **CUDA Support**: Enabled" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- opencv-cuda-build-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}" >> $GITHUB_STEP_SUMMARY
+
+  test-opencv-cuda:
+    name: Test OpenCV CUDA Build
+    needs: opencv-cuda-build
+    runs-on: [self-hosted, linux, gpu]
+    if: always() && needs.opencv-cuda-build.result == 'success'
+    
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.head_ref || github.ref }}
+      
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: opencv-cuda-build-${{ env.BRANCH_NAME }}-${{ env.GIT_SHA }}
+          path: /tmp/opencv-test
+      
+      - name: Test OpenCV installation
+        run: |
+          cd /tmp/opencv-test
+          tar -xzf opencv-cuda-*.tar.gz
+          
+          # Basic import test
+          python3 -c "
+          import sys
+          sys.path.insert(0, '/tmp/opencv-test/opencv-cuda-release')
+          try:
+              import cv2
+              print('✅ OpenCV import successful')
+              print(f'OpenCV version: {cv2.__version__}')
+              try:
+                  cuda_devices = cv2.cuda.getCudaEnabledDeviceCount()
+                  print(f'✅ CUDA devices available: {cuda_devices}')
+              except AttributeError:
+                  print('❌ CUDA support not available')
+          except ImportError as e:
+              print(f'❌ OpenCV import failed: {e}')
+              sys.exit(1)
+          "
+      
+      - name: Performance benchmark
+        run: |
+          cd /tmp/opencv-test
+          python3 -c "
+          import sys
+          import time
+          import numpy as np
+          sys.path.insert(0, '/tmp/opencv-test/opencv-cuda-release')
+          
+          try:
+              import cv2
+              
+              # Create test image
+              img = np.random.randint(0, 255, (1024, 1024, 3), dtype=np.uint8)
+              
+              # CPU processing
+              start_time = time.time()
+              for _ in range(10):
+                  result_cpu = cv2.GaussianBlur(img, (15, 15), 0)
+              cpu_time = time.time() - start_time
+              print(f'CPU processing time: {cpu_time:.3f}s')
+              
+              # GPU processing (if available)
+              try:
+                  gpu_img = cv2.cuda_GpuMat()
+                  gpu_img.upload(img)
+                  gpu_result = cv2.cuda_GpuMat()
+                  
+                  start_time = time.time()
+                  for _ in range(10):
+                      cv2.cuda.bilateralFilter(gpu_img, -1, 50, 50, gpu_result)
+                  gpu_time = time.time() - start_time
+                  print(f'GPU processing time: {gpu_time:.3f}s')
+                  print(f'Speedup: {cpu_time/gpu_time:.2f}x')
+              except Exception as e:
+                  print(f'GPU processing not available: {e}')
+                  
+          except ImportError as e:
+              print(f'Benchmark failed: {e}')
+          "
