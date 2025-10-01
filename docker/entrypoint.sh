@@ -1,14 +1,16 @@
 #!/bin/bash
 
 set -e
-eval "$(conda shell.bash hook)"
+# Activate the virtual environment
+export PATH="/workspace/ComfyUI/.venv/bin:$PATH"
+export VIRTUAL_ENV="/workspace/ComfyUI/.venv"
 
 # Add help command to show usage
 show_help() {
   echo "Usage: entrypoint.sh [OPTIONS]"
   echo ""
   echo "Options:"
-  echo "  --use-volume     Initialize persistent volume mount"
+  echo "  --use-volume     Initialize persistent volume mount for entire ComfyUI workspace"
   echo "  --download-models       Download default models"
   echo "  --build-engines         Build TensorRT engines for default models"
   echo "  --opencv-cuda           Setup OpenCV with CUDA support"
@@ -50,33 +52,62 @@ for arg in "$@"; do
   esac
 done
 
-# Map persistent volume mount for models and engines using symlinks
+# Map persistent volume mount for entire ComfyUI workspace
 if [ "$1" = "--use-volume" ] && [ -d "$WORKSPACE_STORAGE" ]; then
-  echo "Initializing persistent volume mount..."
-  if [ ! -L "$MODELS_DIR" ]; then
-      rm -rf "$MODELS_DIR"
-      ln -s $WORKSPACE_STORAGE/ComfyUI--models "$MODELS_DIR"
-      echo "created symlink for models at $MODELS_DIR"
+  echo "Initializing persistent volume mount for ComfyUI workspace..."
+
+    # Create the workspace directory in storage if it doesn't exist
+    WORKSPACE_STORAGE_COMFYUI="$WORKSPACE_STORAGE/ComfyUI"
+    if [ ! -d "$WORKSPACE_STORAGE_COMFYUI" ]; then
+      mkdir -p "$WORKSPACE_STORAGE_COMFYUI"
+      echo "Created ComfyUI workspace directory at $WORKSPACE_STORAGE_COMFYUI"
+    fi
+
+  # Check if ComfyUI directory is already a symlink
+  if [ ! -L "$COMFYUI_DIR" ]; then
+    # Remove existing ComfyUI directory and create symlink
+    rm -rf "$COMFYUI_DIR"
+    ln -s "$WORKSPACE_STORAGE_COMFYUI" "$COMFYUI_DIR"
+    echo "Created symlink for ComfyUI workspace at $COMFYUI_DIR"
   else
-      echo "symlink for models already exists at $MODELS_DIR"
+    echo "Symlink for ComfyUI workspace already exists at $COMFYUI_DIR"
   fi
 
-  if [ ! -L "$OUTPUT_DIR" ]; then
-      rm -rf "$OUTPUT_DIR"
-      ln -s $WORKSPACE_STORAGE/ComfyUI--output "$OUTPUT_DIR"
-      if [ ! -d "$WORKSPACE_STORAGE/ComfyUI--output/tensorrt" ]; then
-          mkdir -p "$WORKSPACE_STORAGE/ComfyUI--output/tensorrt"
+  # Validate the workspace and check for .venv
+  echo "Validating ComfyUI workspace..."
+  cd "$COMFYUI_DIR"
+
+  # Check if .venv exists and workspace is valid
+  if [ -d "$COMFYUI_DIR/.venv" ]; then
+    echo "Found existing .venv directory, validating environment..."
+    # Check if the venv has the required packages by testing imports
+    if "$COMFYUI_DIR/.venv/bin/python" -c "import torch, torchvision" 2>/dev/null; then
+      echo "ComfyUI workspace validation successful"
+    else
+      echo "Workspace validation failed, creating fresh virtual environment..."
+      rm -rf "$COMFYUI_DIR/.venv"
+      uv venv --python python3.12 "$COMFYUI_DIR/.venv"
+      export PATH="$COMFYUI_DIR/.venv/bin:$PATH"
+      export VIRTUAL_ENV="$COMFYUI_DIR/.venv"
+      if [ -f "$COMFYUI_DIR/requirements.txt" ]; then
+        uv pip install -r "$COMFYUI_DIR/requirements.txt"
       fi
-      echo "created symlink for output at $OUTPUT_DIR"
+    fi
   else
-      echo "symlink for output already exists at $OUTPUT_DIR"
+    echo "No .venv directory found, creating fresh virtual environment..."
+    uv venv --python python3.12 "$COMFYUI_DIR/.venv"
+    export PATH="$COMFYUI_DIR/.venv/bin:$PATH"
+    export VIRTUAL_ENV="$COMFYUI_DIR/.venv"
+    if [ -f "$COMFYUI_DIR/requirements.txt" ]; then
+      uv pip install -r "$COMFYUI_DIR/requirements.txt"
+    fi
   fi
+
   shift
 fi
 
 if [ "$1" = "--download-models" ]; then
   cd /workspace/comfystream
-  conda activate comfystream
   python src/comfystream/scripts/setup_models.py --workspace /workspace/ComfyUI
   shift
 fi
@@ -89,7 +120,6 @@ FASTERLIVEPORTRAIT_DIR="/workspace/ComfyUI/models/liveportrait_onnx"
 
 if [ "$1" = "--build-engines" ]; then
   cd /workspace/comfystream
-  conda activate comfystream
 
   # Build Static Engine for Dreamshaper - Square (512x512)
   python src/comfystream/scripts/build_trt.py --model /workspace/ComfyUI/models/unet/dreamshaper-8-dmd-1kstep.safetensors --out-engine /workspace/ComfyUI/output/tensorrt/static-dreamshaper8_SD15_\$stat-b-1-h-512-w-512_00001_.engine --width 512 --height 512
@@ -160,8 +190,7 @@ fi
 
 if [ "$1" = "--opencv-cuda" ]; then
   cd /workspace/comfystream
-  conda activate comfystream
-  
+
   # Check if OpenCV CUDA build already exists
   if [ ! -f "/workspace/comfystream/opencv-cuda-release.tar.gz" ]; then
     # Download and extract OpenCV CUDA build
@@ -175,18 +204,18 @@ if [ "$1" = "--opencv-cuda" ]; then
 
   # Install required libraries
   # Remove existing cv2 package
-  SITE_PACKAGES_DIR="/workspace/miniconda3/envs/comfystream/lib/python3.12/site-packages"
+  SITE_PACKAGES_DIR="/workspace/ComfyUI/.venv/lib/python3.12/site-packages"
   rm -rf "${SITE_PACKAGES_DIR}/cv2"*
 
   # Copy new cv2 package
   cp -r /workspace/comfystream/cv2 "${SITE_PACKAGES_DIR}/"
 
   # Handle library dependencies
-  CONDA_ENV_LIB="/workspace/miniconda3/envs/comfystream/lib"
-  
+  UV_ENV_LIB="/workspace/ComfyUI/.venv/lib"
+
   # Remove existing libstdc++ and copy system one
-  rm -f "${CONDA_ENV_LIB}/libstdc++.so"*
-  cp /usr/lib/x86_64-linux-gnu/libstdc++.so* "${CONDA_ENV_LIB}/"
+  rm -f "${UV_ENV_LIB}/libstdc++.so"*
+  cp /usr/lib/x86_64-linux-gnu/libstdc++.so* "${UV_ENV_LIB}/"
 
   # Copy OpenCV libraries
   cp /workspace/comfystream/opencv/build/lib/libopencv_* /usr/lib/x86_64-linux-gnu/
@@ -206,20 +235,20 @@ if [ "$START_COMFYUI" = true ] || [ "$START_API" = true ] || [ "$START_UI" = tru
   # Start supervisord in background
   /usr/bin/supervisord -c /etc/supervisor/supervisord.conf &
   sleep 2  # Give supervisord time to start
-  
+
   # Start requested services
   if [ "$START_COMFYUI" = true ]; then
     supervisorctl -c /etc/supervisor/supervisord.conf start comfyui
   fi
-  
+
   if [ "$START_API" = true ]; then
     supervisorctl -c /etc/supervisor/supervisord.conf start comfystream-api
   fi
-  
+
   if [ "$START_UI" = true ]; then
     supervisorctl -c /etc/supervisor/supervisord.conf start comfystream-ui
   fi
-  
+
   # Keep the script running
   tail -f /var/log/supervisord.log
 fi
