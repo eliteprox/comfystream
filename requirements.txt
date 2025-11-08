@@ -1,6 +1,6 @@
 asyncio
-pytrickle @ git+https://github.com/livepeer/pytrickle.git@3f0fda21e2f2055e8f903a0430cfe8e782c0a28d
-comfyui @ git+https://github.com/hiddenswitch/ComfyUI.git@e62df3a8811d8c652a195d4669f4fb27f6c9a9ba
+pytrickle @ git+https://github.com/livepeer/pytrickle.git@393ce79eb1413dc97acafd3eb3ed4b868a891b3a
+# comfyui removed - use filesystem ComfyUI with unified venv instead
 aiortc
 aiohttp
 aiohttp_cors
@@ -8,4 +8,3 @@ toml
 twilio
 prometheus_client
 librosa
-huggingface_hub>=0.20.0
