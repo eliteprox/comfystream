@@ -1,9 +1,10 @@
+import argparse
 import os
 import subprocess
 import sys
 from pathlib import Path
+
 import yaml
-import argparse
 from utils import get_config_path, load_model_config
 
 
@@ -82,7 +83,9 @@ def install_custom_nodes(workspace_dir, config_path=None, pull_branches=False):
                 print(f"Updating {node_info['name']} to latest {node_info['branch']}...")
                 subprocess.run(["git", "-C", dir_name, "fetch", "origin"], check=True)
                 subprocess.run(["git", "-C", dir_name, "checkout", node_info["branch"]], check=True)
-                subprocess.run(["git", "-C", dir_name, "pull", "origin", node_info["branch"]], check=True)
+                subprocess.run(
+                    ["git", "-C", dir_name, "pull", "origin", node_info["branch"]], check=True
+                )
             else:
                 print(f"{node_info['name']} already exists, skipping clone.")
 
@@ -124,7 +127,7 @@ def install_custom_nodes(workspace_dir, config_path=None, pull_branches=False):
 def setup_nodes():
     args = parse_args()
     workspace_dir = Path(args.workspace)
-    
+
     # Resolve config path if provided
     config_path = None
     if args.config:
