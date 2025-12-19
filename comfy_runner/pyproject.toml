@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comfy-runner"
+description = "AI Runner integration for ComfyStream"
+version = "0.1.0"
+dependencies = [
+    "comfystream",
+    "ai-runner[realtime] @ git+https://github.com/livepeer/ai-runner.git@c89d79fa88436539b00065abd5b5fcd54e459fe6#subdirectory=runner",
+]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+ai-runner = { git = "https://github.com/livepeer/ai-runner.git", rev = "c89d79fa88436539b00065abd5b5fcd54e459fe6", subdirectory = "runner" }
+
+[tool.setuptools]
+package-dir = {"" = "."}
+packages = {find = {where = ["."]}}
+

@@ -1,6 +1,6 @@
 ARG BASE_IMAGE=nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04 \
     CONDA_VERSION=latest \
-    PYTHON_VERSION=3.12
+    PYTHON_VERSION=3.11
 
 FROM "${BASE_IMAGE}"
 
@@ -75,7 +75,7 @@ RUN echo "${TensorRT_ROOT}/lib" > /etc/ld.so.conf.d/tensorrt.conf \
 
 # Install matching TensorRT Python bindings for CPython 3.12
 RUN conda run -n comfystream pip install --no-cache-dir \
-    ${TensorRT_ROOT}/python/tensorrt-10.12.0.36-cp312-none-linux_x86_64.whl
+    ${TensorRT_ROOT}/python/tensorrt-10.12.0.36-cp311-none-linux_x86_64.whl
 
 # Clone ComfyUI
 RUN git clone --branch v0.3.76 --depth 1 https://github.com/comfyanonymous/ComfyUI.git /workspace/ComfyUI
@@ -107,7 +107,7 @@ ENV CACHEBUST=${CACHEBUST}
 RUN conda run -n comfystream --no-capture-output --cwd /workspace/comfystream python src/comfystream/scripts/setup_nodes.py --workspace /workspace/ComfyUI
 
 # Setup opencv with CUDA support
-RUN conda run -n comfystream --no-capture-output --cwd /workspace/comfystream --no-capture-output docker/entrypoint.sh --opencv-cuda
+# RUN conda run -n comfystream --no-capture-output --cwd /workspace/comfystream --no-capture-output docker/entrypoint.sh --opencv-cuda
 
 # Configure no environment activation by default
 RUN conda config --set auto_activate_base false && \
@@ -119,6 +119,7 @@ RUN echo "conda activate comfystream" >> ~/.bashrc
 WORKDIR /workspace/comfystream
 
 # Run ComfyStream BYOC server from /workspace/ComfyUI within the comfystream conda env
+# Note: For ai-runner worker mode, use comfy_runner/docker/Dockerfile instead
 ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "comfystream", "--cwd", "/workspace/ComfyUI", "python", "/workspace/comfystream/server/byoc.py"]
 # Default args; can be overridden/appended at runtime
 CMD ["--workspace", "/workspace/ComfyUI", "--host", "0.0.0.0", "--port", "8000"]
