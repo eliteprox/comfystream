@@ -81,6 +81,26 @@ class ComfyStreamClient:
             while not self._shutdown_event.is_set():
                 # IDLE until running is enabled
                 await self._run_enabled_event.wait()
+
+                # Wait until we actually have input to feed the workflow. This prevents
+                # LoadTensor from timing out when the runner loops faster than frames
+                # arrive from upstream.
+                while (
+                    tensor_cache.image_inputs.qsize() == 0
+                    and tensor_cache.audio_inputs.qsize() == 0
+                    and not self._shutdown_event.is_set()
+                    and self._run_enabled_event.is_set()
+                ):
+                    logger.info(
+                        "Runner waiting for input (image_in=%s, audio_in=%s, image_out=%s)",
+                        tensor_cache.image_inputs.qsize(),
+                        tensor_cache.audio_inputs.qsize(),
+                        tensor_cache.image_outputs.qsize(),
+                    )
+                    await asyncio.sleep(0.01)
+                if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
+                    break
+
                 # Snapshot prompts without holding the lock during network I/O
                 async with self._prompt_update_lock:
                     prompts_snapshot = list(self.current_prompts)
@@ -88,6 +108,13 @@ class ComfyStreamClient:
                     if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
                         break
                     try:
+                        logger.info(
+                            "Queueing prompt %s (image_in=%s, audio_in=%s, image_out=%s)",
+                            prompt_index,
+                            tensor_cache.image_inputs.qsize(),
+                            tensor_cache.audio_inputs.qsize(),
+                            tensor_cache.image_outputs.qsize(),
+                        )
                         await self.comfy_client.queue_prompt(prompt)
                     except asyncio.CancelledError:
                         raise
@@ -96,11 +123,8 @@ class ComfyStreamClient:
                         continue
                     except Exception as e:
                         logger.error(f"Error running prompt: {str(e)}")
-                        logger.info("Stopping prompt execution and returning to passthrough mode")
-
-                        # Stop running and switch to default passthrough workflow
-                        await self._fallback_to_passthrough()
-                        break
+                        # Re-raise the error to stop immediately instead of falling back to passthrough
+                        raise
         except asyncio.CancelledError:
             pass
 
@@ -199,6 +223,7 @@ class ComfyStreamClient:
             self._run_enabled_event.clear()
 
     def put_video_input(self, frame):
+        logger.info(f"Putting video input, queue size: {tensor_cache.image_inputs.qsize()}")
         if tensor_cache.image_inputs.full():
             tensor_cache.image_inputs.get(block=True)
         tensor_cache.image_inputs.put(frame)
@@ -207,6 +232,7 @@ class ComfyStreamClient:
         tensor_cache.audio_inputs.put(frame)
 
     async def get_video_output(self):
+        logger.info(f"Getting video output, queue size: {tensor_cache.image_outputs.qsize()}")
         return await tensor_cache.image_outputs.get()
 
     async def get_audio_output(self):
