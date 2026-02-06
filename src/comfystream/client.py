@@ -10,6 +10,7 @@ from comfy.client.embedded_comfy_client import EmbeddedComfyClient
 
 from comfystream import tensor_cache
 from comfystream.exceptions import ComfyStreamInputTimeoutError
+from comfystream.modalities import detect_io_points
 from comfystream.utils import convert_prompt, get_default_workflow
 
 logger = logging.getLogger(__name__)
@@ -86,47 +87,63 @@ class ComfyStreamClient:
                 # IDLE until running is enabled
                 await self._run_enabled_event.wait()
 
+                # Determine which input modalities the workflow actually requires
+                # so we only wait for queues that the workflow will consume.
+                io_caps = detect_io_points(self.current_prompts)
+                needs_video = io_caps["video"]["input"]
+                needs_audio = io_caps["audio"]["input"]
+
                 # Wait until we actually have input to feed the workflow. This prevents
                 # LoadTensor from timing out when the runner loops faster than frames
                 # arrive from upstream. If no input arrives within the timeout, pause
                 # the runner until new input is provided via put_video/audio_input.
-                wait_start = time.monotonic()
-                last_log_time = 0.0
-                timed_out = False
-                while (
-                    tensor_cache.image_inputs.qsize() == 0
-                    and tensor_cache.audio_inputs.qsize() == 0
-                    and not self._shutdown_event.is_set()
-                    and self._run_enabled_event.is_set()
-                ):
-                    elapsed = time.monotonic() - wait_start
-                    if elapsed > self.INPUT_WAIT_TIMEOUT:
-                        logger.warning(
-                            "Runner waited %.1fs for input with no data, "
-                            "pausing prompt execution until new input arrives",
-                            elapsed,
+                # Skip waiting entirely if the workflow has no external input nodes.
+                if needs_video or needs_audio:
+                    wait_start = time.monotonic()
+                    last_log_time = 0.0
+                    timed_out = False
+                    while (
+                        not self._shutdown_event.is_set()
+                        and self._run_enabled_event.is_set()
+                    ):
+                        has_needed_input = (
+                            (needs_video and tensor_cache.image_inputs.qsize() > 0)
+                            or (needs_audio and tensor_cache.audio_inputs.qsize() > 0)
                         )
-                        timed_out = True
+                        if has_needed_input:
+                            break
+                        elapsed = time.monotonic() - wait_start
+                        if elapsed > self.INPUT_WAIT_TIMEOUT:
+                            logger.warning(
+                                "Runner waited %.1fs for input with no data "
+                                "(needs_video=%s, needs_audio=%s), "
+                                "pausing prompt execution until new input arrives",
+                                elapsed,
+                                needs_video,
+                                needs_audio,
+                            )
+                            timed_out = True
+                            break
+                        # Throttle logging to once per second
+                        if elapsed - last_log_time >= 1.0:
+                            logger.info(
+                                "Runner waiting for input "
+                                "(image_in=%s, audio_in=%s, image_out=%s, waited=%.1fs)",
+                                tensor_cache.image_inputs.qsize(),
+                                tensor_cache.audio_inputs.qsize(),
+                                tensor_cache.image_outputs.qsize(),
+                                elapsed,
+                            )
+                            last_log_time = elapsed
+                        await asyncio.sleep(0.01)
+                    if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
                         break
-                    # Throttle logging to once per second
-                    if elapsed - last_log_time >= 1.0:
-                        logger.info(
-                            "Runner waiting for input (image_in=%s, audio_in=%s, "
-                            "image_out=%s, waited=%.1fs)",
-                            tensor_cache.image_inputs.qsize(),
-                            tensor_cache.audio_inputs.qsize(),
-                            tensor_cache.image_outputs.qsize(),
-                            elapsed,
-                        )
-                        last_log_time = elapsed
-                    await asyncio.sleep(0.01)
-                if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
-                    break
-                if timed_out:
-                    # Pause the runner; it will block at the top of the loop on
-                    # _run_enabled_event.wait() until put_video/audio_input re-enables it.
-                    self._run_enabled_event.clear()
-                    continue
+                    if timed_out:
+                        # Pause the runner; it will block at the top of the loop on
+                        # _run_enabled_event.wait() until put_video/audio_input
+                        # re-enables it.
+                        self._run_enabled_event.clear()
+                        continue
 
                 # Snapshot prompts without holding the lock during network I/O
                 async with self._prompt_update_lock:
