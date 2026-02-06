@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 from typing import List
 
 from comfy.api.components.schema.prompt import PromptDictInput
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 
 class ComfyStreamClient:
+    # Maximum seconds to wait for input before cancelling prompt execution.
+    INPUT_WAIT_TIMEOUT = 5.0
+
     def __init__(self, max_workers: int = 1, **kwargs):
         config = Configuration(**kwargs)
         self.comfy_client = EmbeddedComfyClient(config, max_workers=max_workers)
@@ -84,22 +88,45 @@ class ComfyStreamClient:
 
                 # Wait until we actually have input to feed the workflow. This prevents
                 # LoadTensor from timing out when the runner loops faster than frames
-                # arrive from upstream.
+                # arrive from upstream. If no input arrives within the timeout, pause
+                # the runner until new input is provided via put_video/audio_input.
+                wait_start = time.monotonic()
+                last_log_time = 0.0
+                timed_out = False
                 while (
                     tensor_cache.image_inputs.qsize() == 0
                     and tensor_cache.audio_inputs.qsize() == 0
                     and not self._shutdown_event.is_set()
                     and self._run_enabled_event.is_set()
                 ):
-                    logger.info(
-                        "Runner waiting for input (image_in=%s, audio_in=%s, image_out=%s)",
-                        tensor_cache.image_inputs.qsize(),
-                        tensor_cache.audio_inputs.qsize(),
-                        tensor_cache.image_outputs.qsize(),
-                    )
+                    elapsed = time.monotonic() - wait_start
+                    if elapsed > self.INPUT_WAIT_TIMEOUT:
+                        logger.warning(
+                            "Runner waited %.1fs for input with no data, "
+                            "pausing prompt execution until new input arrives",
+                            elapsed,
+                        )
+                        timed_out = True
+                        break
+                    # Throttle logging to once per second
+                    if elapsed - last_log_time >= 1.0:
+                        logger.info(
+                            "Runner waiting for input (image_in=%s, audio_in=%s, "
+                            "image_out=%s, waited=%.1fs)",
+                            tensor_cache.image_inputs.qsize(),
+                            tensor_cache.audio_inputs.qsize(),
+                            tensor_cache.image_outputs.qsize(),
+                            elapsed,
+                        )
+                        last_log_time = elapsed
                     await asyncio.sleep(0.01)
                 if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
                     break
+                if timed_out:
+                    # Pause the runner; it will block at the top of the loop on
+                    # _run_enabled_event.wait() until put_video/audio_input re-enables it.
+                    self._run_enabled_event.clear()
+                    continue
 
                 # Snapshot prompts without holding the lock during network I/O
                 async with self._prompt_update_lock:
@@ -227,9 +254,17 @@ class ComfyStreamClient:
         if tensor_cache.image_inputs.full():
             tensor_cache.image_inputs.get(block=True)
         tensor_cache.image_inputs.put(frame)
+        # Wake the runner if it was paused due to input timeout
+        if not self._run_enabled_event.is_set():
+            logger.info("New video input received, resuming runner")
+            self._run_enabled_event.set()
 
     def put_audio_input(self, frame):
         tensor_cache.audio_inputs.put(frame)
+        # Wake the runner if it was paused due to input timeout
+        if not self._run_enabled_event.is_set():
+            logger.info("New audio input received, resuming runner")
+            self._run_enabled_event.set()
 
     async def get_video_output(self):
         logger.info(f"Getting video output, queue size: {tensor_cache.image_outputs.qsize()}")
