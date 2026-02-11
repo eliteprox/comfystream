@@ -2,7 +2,7 @@
 
 from comfy_compatibility.imports import MAIN_PY, SITE_PACKAGES, ImportContext
 
-with ImportContext("comfy", "comfy_extras", order=[SITE_PACKAGES, MAIN_PY]):
+with ImportContext("comfy", "comfy_extras", "comfy_execution", order=[SITE_PACKAGES, MAIN_PY]):
     from .audio_utils import *
     from .tensor_utils import *
     from .video_stream_utils import *

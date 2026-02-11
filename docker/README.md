@@ -14,11 +14,13 @@ The base Docker image supports specifying a custom nodes configuration file duri
 ### Usage
 
 #### Default build (uses `nodes.yaml`)
+
 ```bash
-docker build -t livepeer/comfyui-base -f docker/Dockerfile .
+docker build -t livepeer/comfyui-base -f docker/Dockerfile.base .
 ```
 
 #### Build with custom config from configs directory
+
 ```bash
 docker build -f docker/Dockerfile.base \
   --build-arg NODES_CONFIG=nodes-streamdiffusion.yaml \
@@ -26,6 +28,7 @@ docker build -f docker/Dockerfile.base \
 ```
 
 #### Build with config from absolute path
+
 ```bash
 docker build -f docker/Dockerfile.base \
   --build-arg NODES_CONFIG=/path/to/custom-nodes.yaml \
@@ -34,13 +37,13 @@ docker build -f docker/Dockerfile.base \
 
 ### Available Build Arguments
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `BASE_IMAGE` | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04` | Base CUDA image |
-| `CONDA_VERSION` | `latest` | Miniconda version |
-| `PYTHON_VERSION` | `3.12` | Python version |
-| `NODES_CONFIG` | `nodes.yaml` | Nodes configuration file (filename or path) |
-| `CACHEBUST` | `static` | Cache invalidation for node setup |
+| Argument         | Default                                      | Description                                 |
+| ---------------- | -------------------------------------------- | ------------------------------------------- |
+| `BASE_IMAGE`     | `nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04` | Base CUDA image                             |
+| `CONDA_VERSION`  | `latest`                                     | Miniconda version                           |
+| `PYTHON_VERSION` | `3.12`                                       | Python version                              |
+| `NODES_CONFIG`   | `nodes.yaml`                                 | Nodes configuration file (filename or path) |
+| `CACHEBUST`      | `static`                                     | Cache invalidation for node setup           |
 
 ### Configuration Files in configs/
 

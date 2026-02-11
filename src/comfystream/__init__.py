@@ -1,6 +1,6 @@
 from comfy_compatibility.imports import MAIN_PY, SITE_PACKAGES, ImportContext
 
-with ImportContext("comfy", "comfy_extras", "comfy.vendor", order=[SITE_PACKAGES, MAIN_PY]):
+with ImportContext("comfy", "comfy_extras", "comfy.vendor", "comfy_execution", order=[SITE_PACKAGES, MAIN_PY]):
     from .client import ComfyStreamClient
     from .exceptions import ComfyStreamAudioBufferError, ComfyStreamInputTimeoutError
     from .pipeline import Pipeline

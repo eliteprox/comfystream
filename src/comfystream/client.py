@@ -7,6 +7,7 @@ from typing import List
 from comfy.api.components.schema.prompt import PromptDictInput
 from comfy.cli_args_types import Configuration
 from comfy.client.embedded_comfy_client import EmbeddedComfyClient
+from comfy.distributed.executors import ContextVarExecutor
 
 from comfystream import tensor_cache
 from comfystream.exceptions import ComfyStreamInputTimeoutError
@@ -16,21 +17,112 @@ from comfystream.utils import convert_prompt, get_default_workflow
 logger = logging.getLogger(__name__)
 
 
+_fsspec_patched = False
+
+
+def _patch_fsspec_registry():
+    """Permanently patch fsspec's register_implementation to allow "pkg" clobber.
+
+    The comfystream ImportContext can evict comfy.component_model.package_filesystem
+    from sys.modules after its module-level ``register_implementation("pkg", ...)``
+    already ran.  Any later re-import -- whether during __aenter__ or inside a
+    ContextVarExecutor thread running queue_prompt -- creates a *new* class that
+    conflicts with the already-registered one in fsspec.
+
+    Rather than temporarily patching and restoring (which leaves the executor thread
+    unprotected), we apply the patch once and leave it in place.  Only the "pkg"
+    protocol is affected; all other registrations behave normally.
+    """
+    global _fsspec_patched
+    if _fsspec_patched:
+        return
+
+    import importlib
+
+    _fsreg = importlib.import_module("fsspec.registry")
+    _original_register = _fsreg.register_implementation
+
+    def _lenient_register(name, cls, clobber=False, errtxt=None):
+        if name == "pkg":
+            clobber = True
+        return _original_register(name, cls, clobber=clobber, errtxt=errtxt)
+
+    _fsreg.register_implementation = _lenient_register
+    _fsspec_patched = True
+
+
+def _create_embedded_client(
+    config: Configuration,
+    max_workers: int,
+    executor: ContextVarExecutor,
+) -> EmbeddedComfyClient:
+    """Create an EmbeddedComfyClient that always uses a ContextVarExecutor.
+
+    EmbeddedComfyClient's constructor rejects ContextVarExecutor when the config
+    contains model-management flags (e.g. gpu_only) that normally require a
+    ProcessPoolExecutor for process isolation.  Since comfystream runs ComfyUI
+    in-process and doesn't need that isolation, we construct the client without
+    a config first, then patch in the real config so the executor validation is
+    bypassed while the configuration is still applied at runtime.
+    """
+    client = EmbeddedComfyClient(configuration=None, max_workers=max_workers)
+    # Replace the auto-created executor with the one we want
+    if client._owns_executor and client._executor is not None:
+        client._executor.shutdown(wait=False)
+    client._executor = executor
+    client._owns_executor = True
+    # Apply the real configuration so it's used in __aenter__ / queue_prompt
+    client._configuration = config
+    return client
+
+
 class ComfyStreamClient:
     # Maximum seconds to wait for input before cancelling prompt execution.
     INPUT_WAIT_TIMEOUT = 5.0
 
     def __init__(self, max_workers: int = 1, **kwargs):
         config = Configuration(**kwargs)
-        self.comfy_client = EmbeddedComfyClient(config, max_workers=max_workers)
+        # Force ContextVarExecutor (thread-based) to avoid ProcessPoolExecutor pickling
+        # issues. ComfyUI auto-selects ProcessPoolExecutor when model-management flags
+        # like gpu_only are set, but ProcessPoolExecutor pickles the contextvars.Context
+        # on every submission which fails when cvpickle._context_factory can't be
+        # resolved (e.g. under debugpy or after module reloads). Since comfystream
+        # embeds ComfyUI in-process, process isolation is unnecessary and
+        # ContextVarExecutor (a ThreadPoolExecutor) works correctly while still
+        # propagating the configuration via context vars.
+        executor = ContextVarExecutor(max_workers=max_workers)
+        self.comfy_client = _create_embedded_client(config, max_workers, executor)
         self.current_prompts = []
         self._cleanup_lock = asyncio.Lock()
         self._prompt_update_lock = asyncio.Lock()
+        self._started = False
 
         # PromptRunner state
         self._shutdown_event = asyncio.Event()
         self._run_enabled_event = asyncio.Event()
         self._runner_task = None
+
+    async def start(self):
+        """Enter the EmbeddedComfyClient async context manager.
+
+        This must be called before the first queue_prompt.  It applies
+        context_configuration (populating folder_names_and_paths in the
+        execution context) and formally starts the executor.  Without this,
+        every queue_prompt call would trigger init_default_paths which can
+        fail under debugpy due to duplicate fsspec registrations.
+        """
+        if self._started:
+            return
+        # The comfystream ImportContext can evict package_filesystem from sys.modules
+        # after its module-level fsspec registration already ran.  Any later re-import
+        # (during __aenter__ or inside a ContextVarExecutor thread running queue_prompt)
+        # creates a new class that fails fsspec's identity check.  Patch once so all
+        # future "pkg" registrations use clobber=True.
+        _patch_fsspec_registry()
+
+        await self.comfy_client.__aenter__()
+        self._started = True
+        logger.debug("EmbeddedComfyClient async context entered")
 
     async def set_prompts(self, prompts: List[PromptDictInput]):
         """Set new prompts, replacing any existing ones.
@@ -78,6 +170,10 @@ class ComfyStreamClient:
             return
         if not self.current_prompts:
             return
+        # Enter the EmbeddedComfyClient context before the first prompt run.
+        # This applies context_configuration so queue_prompt doesn't need to
+        # call init_default_paths on every execution.
+        await self.start()
         self._shutdown_event.clear()
         self._runner_task = asyncio.create_task(self._runner_loop())
 
@@ -152,7 +248,7 @@ class ComfyStreamClient:
                     if self._shutdown_event.is_set() or not self._run_enabled_event.is_set():
                         break
                     try:
-                        logger.info(
+                        logger.debug(
                             "Queueing prompt %s (image_in=%s, audio_in=%s, image_out=%s)",
                             prompt_index,
                             tensor_cache.image_inputs.qsize(),
@@ -163,7 +259,7 @@ class ComfyStreamClient:
                     except asyncio.CancelledError:
                         raise
                     except ComfyStreamInputTimeoutError:
-                        logger.info(f"Input for prompt {prompt_index} timed out, continuing")
+                        logger.warning(f"Input for prompt {prompt_index} timed out, continuing")
                         continue
                     except Exception as e:
                         logger.error(f"Error running prompt: {str(e)}")
@@ -185,11 +281,13 @@ class ComfyStreamClient:
         self._run_enabled_event.clear()
 
         async with self._cleanup_lock:
-            if getattr(self.comfy_client, "is_running", False):
+            if self._started:
                 try:
-                    await self.comfy_client.__aexit__()
+                    await self.comfy_client.__aexit__(None, None, None)
                 except Exception as e:
                     logger.error(f"Error during ComfyClient cleanup: {e}")
+                finally:
+                    self._started = False
 
             await self.cleanup_queues()
             logger.info("Client cleanup complete")
@@ -267,7 +365,7 @@ class ComfyStreamClient:
             self._run_enabled_event.clear()
 
     def put_video_input(self, frame):
-        logger.info(f"Putting video input, queue size: {tensor_cache.image_inputs.qsize()}")
+        logger.debug(f"Putting video input, queue size: {tensor_cache.image_inputs.qsize()}")
         if tensor_cache.image_inputs.full():
             tensor_cache.image_inputs.get(block=True)
         tensor_cache.image_inputs.put(frame)
@@ -284,7 +382,7 @@ class ComfyStreamClient:
             self._run_enabled_event.set()
 
     async def get_video_output(self):
-        logger.info(f"Getting video output, queue size: {tensor_cache.image_outputs.qsize()}")
+        logger.debug(f"Getting video output, queue size: {tensor_cache.image_outputs.qsize()}")
         return await tensor_cache.image_outputs.get()
 
     async def get_audio_output(self):
