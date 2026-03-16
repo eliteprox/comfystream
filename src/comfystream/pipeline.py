@@ -101,7 +101,7 @@ class Pipeline:
 
         try:
             await self.client.set_prompts([default_workflow])
-            await self.client.resume_prompts()
+            await self.client.set_running(True)
 
             dummy_frame = av.VideoFrame()
             dummy_frame.side_data.input = torch.randn(1, self.height, self.width, 3)
@@ -117,7 +117,7 @@ class Pipeline:
             raise RuntimeError("Bootstrap prompt timed out while waiting for output") from exc
         finally:
             try:
-                await self.client.stop_prompts(cleanup=False)
+                await self.client.stop_runner()
             except Exception:
                 logger.debug("Failed to stop bootstrap prompts cleanly", exc_info=True)
 
@@ -193,10 +193,18 @@ class Pipeline:
             logger.debug("Skipping warmup scheduling - pipeline not initialized")
             return
 
+        # Don't re-attempt warmup when the pipeline is in a fatal error state.
+        # Recovery requires explicit intervention (e.g. new prompts or stream restart).
+        if self.state == PipelineState.ERROR:
+            logger.debug("Skipping warmup scheduling - pipeline in ERROR state")
+            return
+
         async with self._warmup_lock:
             if self._warmup_completed:
                 return
             if not self.state_manager.is_initialized():
+                return
+            if self.state == PipelineState.ERROR:
                 return
             if self._warmup_task and not self._warmup_task.done():
                 return
@@ -527,19 +535,17 @@ class Pipeline:
         if self.state in {PipelineState.STREAMING, PipelineState.INITIALIZING}:
             await self.state_manager.transition_to(PipelineState.READY)
 
-        await self.client.stop_prompts(cleanup=cleanup)
-
-        # Clear cached modalities and I/O capabilities when prompts are stopped
         if cleanup:
             self._cached_modalities = None
             self._cached_io_capabilities = None
-            # Clear pipeline queues for full cleanup
             await self._clear_pipeline_queues()
+            await self.client.cleanup()
             try:
                 await self.state_manager.transition_to(PipelineState.UNINITIALIZED)
             except Exception:
                 logger.exception("Failed to transition pipeline to UNINITIALIZED during cleanup")
         else:
+            await self.client.stop_runner()
             try:
                 await self.state_manager.transition_to(PipelineState.READY)
             except ValueError:
@@ -549,7 +555,7 @@ class Pipeline:
 
     async def stop_prompts_immediately(self):
         """Cancel prompt execution tasks without full cleanup."""
-        await self.client.stop_prompts_immediately()
+        await self.client.stop_runner()
         try:
             await self.state_manager.transition_to(PipelineState.READY)
         except ValueError:

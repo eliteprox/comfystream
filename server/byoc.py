@@ -12,6 +12,7 @@ if torch.cuda.is_available():
 
 from aiohttp import web
 from frame_processor import ComfyStreamFrameProcessor
+from job_handler import JobHandler
 from pytrickle.frame_overlay import OverlayConfig, OverlayMode
 from pytrickle.frame_skipper import FrameSkipConfig
 from pytrickle.stream_processor import StreamProcessor
@@ -161,6 +162,11 @@ def main():
 
     # Set the stream processor reference for text data publishing
     frame_processor.set_stream_processor(processor)
+
+    # Register one-shot job endpoint for text-to-image, image-to-image, text-to-video
+    job_handler = JobHandler(frame_processor=frame_processor)
+    processor.server.add_route("POST", "/process", job_handler.handle_process_request)
+    logger.info("Registered POST /process endpoint for one-shot job execution")
 
     logger.info("Startup warmup runs automatically as part of on_stream_start.")
 

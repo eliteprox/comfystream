@@ -108,6 +108,46 @@ class LocalComfyStreamServer(ComfyStreamServerBase):
         self.health_check_interval = health_check_interval
         atexit.register(self.cleanup)
 
+    @staticmethod
+    def _detect_comfyui_workspace() -> Path:
+        """Detect the ComfyUI workspace root directory.
+
+        When comfystream is symlinked into custom_nodes/, Python's __file__
+        may resolve through the symlink (giving the real path outside ComfyUI)
+        or keep the symlink path. We check both to find the ComfyUI root that
+        contains custom_nodes/ (the definitive ComfyUI workspace marker).
+
+        Falls back to ~/ComfyUI if detection fails.
+        """
+
+        def _is_comfyui_root(path: Path) -> bool:
+            return (path / "custom_nodes").is_dir()
+
+        # Try 1: Walk up from __file__ as-is (works when Python keeps the
+        # symlink path, e.g. /workspace/ComfyUI/custom_nodes/comfystream/...).
+        for parent in Path(__file__).parents:
+            if _is_comfyui_root(parent):
+                return parent
+
+        # Try 2: Walk up from the resolved (realpath) location. This handles
+        # the case where __file__ is already resolved but the repo lives
+        # inside the ComfyUI tree without symlinks.
+        for parent in Path(os.path.realpath(__file__)).parents:
+            if _is_comfyui_root(parent):
+                return parent
+
+        # Try 3: Check sys.path entries — ComfyUI typically adds its root.
+        for p in sys.path:
+            candidate = Path(p)
+            if candidate.is_dir() and _is_comfyui_root(candidate):
+                return candidate
+
+        fallback = Path.home() / "ComfyUI"
+        logging.warning(
+            f"Could not detect ComfyUI workspace, falling back to {fallback}"
+        )
+        return fallback
+
     def find_available_port(self):
         """Find an available port starting from start_port"""
         port = self.start_port
@@ -149,13 +189,22 @@ class LocalComfyStreamServer(ComfyStreamServerBase):
             if host is not None:
                 self.host = host
 
-            # Get the path to the ComfyStream server directory and script
-            server_dir = Path(__file__).parent.parent / "server"
+            # Get the path to the ComfyStream server directory and script.
+            # Use the package root (parent of nodes/) rather than relative __file__
+            # traversal, which breaks when comfystream is symlinked into custom_nodes.
+            comfystream_root = Path(__file__).parent.parent
+            server_dir = comfystream_root / "server"
             server_script = server_dir / "app.py"
             logging.info(f"Server script: {server_script}")
 
-            # Get ComfyUI workspace path (which is where we'll run from)
-            comfyui_workspace = Path(__file__).parent.parent.parent.parent
+            # Get ComfyUI workspace path (which is where we'll run from).
+            # Prefer the COMFYUI_CWD env var (set by entrypoint.sh / docker / scripts),
+            # then fall back to detecting the ComfyUI root directory.
+            comfyui_workspace = os.environ.get("COMFYUI_CWD")
+            if comfyui_workspace:
+                comfyui_workspace = Path(comfyui_workspace)
+            else:
+                comfyui_workspace = self._detect_comfyui_workspace()
             logging.info(f"ComfyUI workspace: {comfyui_workspace}")
 
             # Use the system Python (which should have ComfyStream installed)
@@ -179,7 +228,11 @@ class LocalComfyStreamServer(ComfyStreamServerBase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(comfyui_workspace),  # Run from ComfyUI root
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                env={
+                    **os.environ,
+                    "PYTHONUNBUFFERED": "1",
+                    "COMFYUI_CWD": str(comfyui_workspace),
+                },
             )
 
             # Start threads to log stdout and stderr

@@ -2,17 +2,17 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import List
+from typing import List, Optional
 
 from comfy.api.components.schema.prompt import PromptDictInput
 from comfy.cli_args_types import Configuration
-from comfy.client.embedded_comfy_client import EmbeddedComfyClient
+from comfy.client.embedded_comfy_client import Comfy
 from comfy.distributed.executors import ContextVarExecutor
 
 from comfystream import tensor_cache
-from comfystream.exceptions import ComfyStreamInputTimeoutError
+from comfystream.exceptions import ComfyStreamInputTimeoutError, ComfyStreamRunnerError
 from comfystream.modalities import detect_io_points
-from comfystream.utils import convert_prompt, get_default_workflow
+from comfystream.utils import convert_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,12 @@ def _patch_fsspec_registry():
 
     The comfystream ImportContext can evict comfy.component_model.package_filesystem
     from sys.modules after its module-level ``register_implementation("pkg", ...)``
-    already ran.  Any later re-import -- whether during __aenter__ or inside a
-    ContextVarExecutor thread running queue_prompt -- creates a *new* class that
-    conflicts with the already-registered one in fsspec.
+    already ran.  Any later re-import -- during __aenter__ or node loading --
+    creates a *new* class that conflicts with the already-registered one in fsspec.
 
-    Rather than temporarily patching and restoring (which leaves the executor thread
-    unprotected), we apply the patch once and leave it in place.  Only the "pkg"
-    protocol is affected; all other registrations behave normally.
+    Rather than temporarily patching and restoring, we apply the patch once and
+    leave it in place.  Only the "pkg" protocol is affected; all other
+    registrations behave normally.
     """
     global _fsspec_patched
     if _fsspec_patched:
@@ -51,78 +50,61 @@ def _patch_fsspec_registry():
     _fsspec_patched = True
 
 
-def _create_embedded_client(
-    config: Configuration,
-    max_workers: int,
-    executor: ContextVarExecutor,
-) -> EmbeddedComfyClient:
-    """Create an EmbeddedComfyClient that always uses a ContextVarExecutor.
-
-    EmbeddedComfyClient's constructor rejects ContextVarExecutor when the config
-    contains model-management flags (e.g. gpu_only) that normally require a
-    ProcessPoolExecutor for process isolation.  Since comfystream runs ComfyUI
-    in-process and doesn't need that isolation, we construct the client without
-    a config first, then patch in the real config so the executor validation is
-    bypassed while the configuration is still applied at runtime.
-    """
-    client = EmbeddedComfyClient(configuration=None, max_workers=max_workers)
-    # Replace the auto-created executor with the one we want
-    if client._owns_executor and client._executor is not None:
-        client._executor.shutdown(wait=False)
-    client._executor = executor
-    client._owns_executor = True
-    # Apply the real configuration so it's used in __aenter__ / queue_prompt
-    client._configuration = config
-    return client
-
-
 class ComfyStreamClient:
     # Maximum seconds to wait for input before cancelling prompt execution.
     INPUT_WAIT_TIMEOUT = 5.0
 
-    def __init__(self, max_workers: int = 1, **kwargs):
+    def __init__(
+        self,
+        max_workers: int = 1,
+        **kwargs,
+    ):
         config = Configuration(**kwargs)
-        # Force ContextVarExecutor (thread-based) to avoid ProcessPoolExecutor pickling
-        # issues. ComfyUI auto-selects ProcessPoolExecutor when model-management flags
-        # like gpu_only are set, but ProcessPoolExecutor pickles the contextvars.Context
-        # on every submission which fails when cvpickle._context_factory can't be
-        # resolved (e.g. under debugpy or after module reloads). Since comfystream
-        # embeds ComfyUI in-process, process isolation is unnecessary and
-        # ContextVarExecutor (a ThreadPoolExecutor) works correctly while still
-        # propagating the configuration via context vars.
+        # Force ContextVarExecutor (thread-based) instead of ProcessPoolExecutor.
+        # ComfyUI's Comfy constructor auto-selects ProcessPoolExecutor when
+        # model-management flags like gpu_only are set.  ProcessPoolExecutor
+        # pickles the contextvars.Context on every submission, which fails when
+        # comfystream's ImportContext causes a module-identity mismatch for
+        # Configuration (or other comfy types).  ContextVarExecutor avoids
+        # pickling entirely while still propagating context vars via threads.
+        #
+        # We pass configuration=None so the constructor's executor-type
+        # validation is skipped, then apply the real config afterwards.
         executor = ContextVarExecutor(max_workers=max_workers)
-        self.comfy_client = _create_embedded_client(config, max_workers, executor)
+        self.comfy_client = Comfy(
+            configuration=None,
+            max_workers=max_workers,
+            executor=executor,
+        )
+        self.comfy_client._owns_executor = True
+        self.comfy_client._configuration = config
         self.current_prompts = []
         self._cleanup_lock = asyncio.Lock()
         self._prompt_update_lock = asyncio.Lock()
         self._started = False
 
-        # PromptRunner state
+        # Runner state
         self._shutdown_event = asyncio.Event()
         self._run_enabled_event = asyncio.Event()
         self._runner_task = None
+        self._runner_error: Optional[Exception] = None
+        self._runner_error_event = asyncio.Event()
 
     async def start(self):
-        """Enter the EmbeddedComfyClient async context manager.
+        """Enter the Comfy async context manager.
 
         This must be called before the first queue_prompt.  It applies
         context_configuration (populating folder_names_and_paths in the
         execution context) and formally starts the executor.  Without this,
         every queue_prompt call would trigger init_default_paths which can
-        fail under debugpy due to duplicate fsspec registrations.
+        fail due to duplicate fsspec registrations.
         """
         if self._started:
             return
-        # The comfystream ImportContext can evict package_filesystem from sys.modules
-        # after its module-level fsspec registration already ran.  Any later re-import
-        # (during __aenter__ or inside a ContextVarExecutor thread running queue_prompt)
-        # creates a new class that fails fsspec's identity check.  Patch once so all
-        # future "pkg" registrations use clobber=True.
         _patch_fsspec_registry()
-
         await self.comfy_client.__aenter__()
         self._started = True
-        logger.debug("EmbeddedComfyClient async context entered")
+        logger.debug("Comfy async context entered")
 
     async def set_prompts(self, prompts: List[PromptDictInput]):
         """Set new prompts, replacing any existing ones.
@@ -143,7 +125,7 @@ class ComfyStreamClient:
         self.current_prompts = [convert_prompt(prompt) for prompt in prompts]
         logger.info(f"Configured {len(self.current_prompts)} prompt(s)")
         # Ensure runner exists (IDLE until resumed)
-        await self.ensure_prompt_tasks_running()
+        await self._ensure_runner_task()
         if was_running:
             self._run_enabled_event.set()
 
@@ -164,17 +146,49 @@ class ComfyStreamClient:
                 except Exception as e:
                     raise Exception(f"Prompt update failed: {str(e)}") from e
 
-    async def ensure_prompt_tasks_running(self):
-        # Ensure the single runner task exists (does not force running)
+    async def set_running(self, enabled: bool):
+        """Single toggle for the runner loop.
+
+        When *enabled* is True the runner task is created if it doesn't
+        exist yet and the run-enabled event is set so prompt execution
+        proceeds.  When False the event is cleared so the runner idles at
+        the top of its loop.
+
+        This is the only method that external code (e.g. PipelineStateManager)
+        should call to pause / resume prompt execution.
+        """
+        if enabled:
+            await self._ensure_runner_task()
+            self._run_enabled_event.set()
+            logger.debug("Prompt execution enabled")
+        else:
+            self._run_enabled_event.clear()
+            logger.debug("Prompt execution paused")
+
+    async def stop_runner(self):
+        """Cancel the runner task and reset runner state.  Idempotent."""
+        self._run_enabled_event.clear()
+        if self._runner_task:
+            self._runner_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._runner_task
+            self._runner_task = None
+
+    async def _ensure_runner_task(self):
+        """Create the runner task if it doesn't exist yet.
+
+        Does *not* enable running -- the caller must set ``_run_enabled_event``
+        separately.
+        """
         if self._runner_task and not self._runner_task.done():
             return
         if not self.current_prompts:
             return
-        # Enter the EmbeddedComfyClient context before the first prompt run.
-        # This applies context_configuration so queue_prompt doesn't need to
-        # call init_default_paths on every execution.
         await self.start()
         self._shutdown_event.clear()
+        # Clear any previous runner error so a fresh runner starts clean
+        self._runner_error = None
+        self._runner_error_event.clear()
         self._runner_task = asyncio.create_task(self._runner_loop())
 
     async def _runner_loop(self):
@@ -262,23 +276,28 @@ class ComfyStreamClient:
                         logger.warning(f"Input for prompt {prompt_index} timed out, continuing")
                         continue
                     except Exception as e:
-                        logger.error(f"Error running prompt: {str(e)}")
+                        logger.error(f"Error running prompt: {str(e)}", exc_info=True)
                         # Re-raise the error to stop immediately instead of falling back to passthrough
                         raise
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            # Fatal runner error: store it and signal so that pending
+            # get_video_output / get_audio_output calls raise immediately
+            # instead of hanging on empty queues.
+            self._runner_error = e
+            self._runner_error_event.set()
+            self._run_enabled_event.clear()
+            logger.error(f"Runner loop terminated with fatal error: {e}")
 
     async def cleanup(self):
-        # Signal runner to shutdown
+        """Full teardown: stop runner, exit Comfy context, clear queues."""
         self._shutdown_event.set()
-        if self._runner_task:
-            self._runner_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._runner_task
-            self._runner_task = None
+        await self.stop_runner()
 
-        # Pause running
-        self._run_enabled_event.clear()
+        # Clear runner error state
+        self._runner_error = None
+        self._runner_error_event.clear()
 
         async with self._cleanup_lock:
             if self._started:
@@ -291,32 +310,6 @@ class ComfyStreamClient:
 
             await self.cleanup_queues()
             logger.info("Client cleanup complete")
-
-    def pause_prompts(self):
-        """Pause prompt execution loops without canceling underlying tasks."""
-        self._run_enabled_event.clear()
-        logger.debug("Prompt execution paused")
-
-    async def resume_prompts(self):
-        """Resume prompt execution loops."""
-        await self.ensure_prompt_tasks_running()
-        self._run_enabled_event.set()
-        logger.debug("Prompt execution resumed")
-
-    async def stop_prompts(self, cleanup: bool = False):
-        """Stop running prompts by canceling their tasks.
-
-        Args:
-            cleanup: If True, perform full cleanup including queue clearing and
-                client shutdown. If False, only cancel prompt tasks.
-        """
-        await self.stop_prompts_immediately()
-
-        if cleanup:
-            await self.cleanup()
-            logger.info("Prompts stopped with full cleanup")
-        else:
-            logger.debug("Prompts stopped (tasks cancelled)")
 
     async def cleanup_queues(self):
         while not tensor_cache.image_inputs.empty():
@@ -333,36 +326,6 @@ class ComfyStreamClient:
 
         while not tensor_cache.text_outputs.empty():
             await tensor_cache.text_outputs.get()
-
-    async def stop_prompts_immediately(self):
-        """Cancel the runner task to immediately stop any in-flight prompt execution."""
-        self._run_enabled_event.clear()
-        if self._runner_task:
-            self._runner_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._runner_task
-            self._runner_task = None
-
-    async def _fallback_to_passthrough(self):
-        """Switch to default passthrough workflow when an error occurs."""
-        try:
-            # Pause the runner
-            self._run_enabled_event.clear()
-
-            # Set to default passthrough workflow
-            default_workflow = get_default_workflow()
-            async with self._prompt_update_lock:
-                self.current_prompts = [convert_prompt(default_workflow)]
-
-            logger.info("Switched to default passthrough workflow")
-
-            # Resume the runner with passthrough workflow
-            self._run_enabled_event.set()
-
-        except Exception as e:
-            logger.error(f"Failed to fallback to passthrough: {str(e)}")
-            # If fallback fails, just pause execution
-            self._run_enabled_event.clear()
 
     def put_video_input(self, frame):
         logger.debug(f"Putting video input, queue size: {tensor_cache.image_inputs.qsize()}")
@@ -383,10 +346,49 @@ class ComfyStreamClient:
 
     async def get_video_output(self):
         logger.debug(f"Getting video output, queue size: {tensor_cache.image_outputs.qsize()}")
-        return await tensor_cache.image_outputs.get()
+        return await self._get_output_or_raise(tensor_cache.image_outputs)
 
     async def get_audio_output(self):
-        return await tensor_cache.audio_outputs.get()
+        return await self._get_output_or_raise(tensor_cache.audio_outputs)
+
+    async def _get_output_or_raise(self, queue: asyncio.Queue):
+        """Get from an async queue, raising immediately if the runner has failed.
+
+        Races the queue read against the runner error event so callers never
+        hang indefinitely on an empty queue after a fatal runner failure.
+        """
+        if self._runner_error is not None:
+            raise ComfyStreamRunnerError(
+                f"Runner loop failed: {self._runner_error}",
+                self._runner_error,
+            )
+
+        get_task = asyncio.create_task(queue.get())
+        error_task = asyncio.create_task(self._runner_error_event.wait())
+
+        try:
+            done, pending = await asyncio.wait(
+                {get_task, error_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+            if get_task in done:
+                return get_task.result()
+
+            # Error event fired — runner is dead
+            raise ComfyStreamRunnerError(
+                f"Runner loop failed: {self._runner_error}",
+                self._runner_error,
+            )
+        except asyncio.CancelledError:
+            get_task.cancel()
+            error_task.cancel()
+            raise
 
     async def get_text_output(self):
         try:

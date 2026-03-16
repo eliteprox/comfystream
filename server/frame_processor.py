@@ -9,6 +9,7 @@ from pytrickle.frames import AudioFrame, VideoFrame
 from pytrickle.stream_processor import VideoProcessingResult
 from utils_byoc import ComfyStreamParamsUpdateRequest, normalize_stream_params
 
+from comfystream.exceptions import ComfyStreamRunnerError
 from comfystream.pipeline import Pipeline
 from comfystream.pipeline_state import PipelineState
 from comfystream.utils import (
@@ -43,6 +44,7 @@ class ComfyStreamFrameProcessor(FrameProcessor):
         self._text_forward_task = None
         self._background_tasks = []
         self._stop_event = asyncio.Event()
+        self._fatal_error_occurred = False
 
     async def _apply_stream_start_prompt(self, prompt_value: Any) -> bool:
         if not self.pipeline:
@@ -252,6 +254,7 @@ class ComfyStreamFrameProcessor(FrameProcessor):
     def _reset_stop_event(self):
         """Reset the stop event for a new stream."""
         self._stop_event.clear()
+        self._fatal_error_occurred = False
 
     async def on_stream_start(self, params: Optional[Dict[str, Any]] = None):
         """Handle stream start lifecycle events."""
@@ -383,6 +386,26 @@ class ComfyStreamFrameProcessor(FrameProcessor):
         except Exception:
             logger.warning("Failed to schedule warmup", exc_info=True)
 
+    def _request_stream_stop(self, error_msg: str):
+        """Request the stream to stop due to a fatal runner error.
+
+        Sets the pytrickle client's error and stop events so that the trickle
+        ingress/egress loops exit cleanly on their next iteration.  The
+        StreamServer's ``_run_client_stream`` will then trigger the normal
+        shutdown path (including ``on_stream_stop``).
+        """
+        self._fatal_error_occurred = True
+        self._stop_event.set()
+
+        if not self._stream_processor:
+            return
+
+        client = self._stream_processor.server.current_client
+        if client and not client.stop_event.is_set():
+            logger.error(f"Requesting stream stop due to fatal error: {error_msg}")
+            client.error_event.set()
+            client.stop_event.set()
+
     async def process_video_async(
         self, frame: VideoFrame
     ) -> Union[VideoFrame, VideoProcessingResult]:
@@ -392,7 +415,7 @@ class ComfyStreamFrameProcessor(FrameProcessor):
         processed frames are not yet available.
         """
         try:
-            if not self.pipeline:
+            if not self.pipeline or self._fatal_error_occurred:
                 return frame
 
             # TODO: Do we really need this here?
@@ -417,6 +440,11 @@ class ComfyStreamFrameProcessor(FrameProcessor):
             processed_frame = VideoFrame.from_av_frame_with_timing(processed_av_frame, frame)
             return processed_frame
 
+        except ComfyStreamRunnerError as e:
+            logger.error(f"Pipeline runner failed, stopping stream: {e}")
+            self._request_stream_stop(str(e))
+            return VideoProcessingResult.WITHHELD
+
         except Exception as e:
             logger.error(f"Video processing failed: {e}")
             return frame
@@ -424,7 +452,7 @@ class ComfyStreamFrameProcessor(FrameProcessor):
     async def process_audio_async(self, frame: AudioFrame) -> List[AudioFrame]:
         """Process audio frame through ComfyStream Pipeline or passthrough."""
         try:
-            if not self.pipeline:
+            if not self.pipeline or self._fatal_error_occurred:
                 return [frame]
 
             # If pipeline ingestion is paused, passthrough audio
@@ -439,6 +467,11 @@ class ComfyStreamFrameProcessor(FrameProcessor):
             processed_av_frame = await self.pipeline.get_processed_audio_frame()
             processed_frame = AudioFrame.from_av_audio(processed_av_frame)
             return [processed_frame]
+
+        except ComfyStreamRunnerError as e:
+            logger.error(f"Pipeline runner failed, stopping stream: {e}")
+            self._request_stream_stop(str(e))
+            return [frame]
 
         except Exception as e:
             logger.error(f"Audio processing failed: {e}")

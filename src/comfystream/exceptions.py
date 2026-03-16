@@ -74,6 +74,23 @@ class ComfyStreamAudioBufferError(ComfyStreamInputTimeoutError):
         return details
 
 
+class ComfyStreamRunnerError(Exception):
+    """Raised when the ComfyStream prompt runner loop fails fatally.
+
+    This error indicates that the background prompt execution loop has
+    encountered an unrecoverable error and stopped. Any pending output
+    queue reads will raise this error instead of hanging indefinitely.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        original_error: Optional[Exception] = None,
+    ):
+        self.original_error = original_error
+        super().__init__(message)
+
+
 class ComfyStreamTimeoutFilter(logging.Filter):
     """Filter to suppress verbose ComfyUI execution logs for ComfyStream timeout exceptions."""
 
