@@ -1,9 +1,10 @@
+import argparse
 import os
 import subprocess
 import sys
 from pathlib import Path
+
 import yaml
-import argparse
 from utils import get_config_path, load_model_config
 
 
@@ -19,6 +20,11 @@ def parse_args():
         action="store_true",
         default=False,
         help="Update existing nodes to their specified branches",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to custom nodes config file (default: configs/nodes.yaml). Can be a filename (searches in configs/), or an absolute/relative path.",
     )
     return parser.parse_args()
 
@@ -77,7 +83,9 @@ def install_custom_nodes(workspace_dir, config_path=None, pull_branches=False):
                 print(f"Updating {node_info['name']} to latest {node_info['branch']}...")
                 subprocess.run(["git", "-C", dir_name, "fetch", "origin"], check=True)
                 subprocess.run(["git", "-C", dir_name, "checkout", node_info["branch"]], check=True)
-                subprocess.run(["git", "-C", dir_name, "pull", "origin", node_info["branch"]], check=True)
+                subprocess.run(
+                    ["git", "-C", dir_name, "pull", "origin", node_info["branch"]], check=True
+                )
             else:
                 print(f"{node_info['name']} already exists, skipping clone.")
 
@@ -119,10 +127,21 @@ def install_custom_nodes(workspace_dir, config_path=None, pull_branches=False):
 def setup_nodes():
     args = parse_args()
     workspace_dir = Path(args.workspace)
+    
+    # Resolve config path if provided
+    config_path = None
+    if args.config:
+        config_path = Path(args.config)
+        # If it's just a filename, look in configs directory
+        if not config_path.is_absolute() and "/" not in str(config_path):
+            config_path = Path("configs") / config_path
+        if not config_path.exists():
+            print(f"Error: Config file not found at {config_path}")
+            sys.exit(1)
 
     setup_environment(workspace_dir)
     setup_directories(workspace_dir)
-    install_custom_nodes(workspace_dir, pull_branches=args.pull_branches)
+    install_custom_nodes(workspace_dir, config_path=config_path, pull_branches=args.pull_branches)
 
 
 if __name__ == "__main__":
