@@ -19,6 +19,7 @@ BACKENDS = {
     "flux_klein": "comfystream.realtime.flux_klein_backend:FluxKleinBackend",
     "comfy_workflow": "comfystream.realtime.comfy_backend:ComfyWorkflowBackend",
     "h3_clip": "comfystream.realtime.h3_backend:H3ClipBackend",
+    "ffmpeg_filter": "comfystream.realtime.ffmpeg_backend:FfmpegWorkflowBackend",
 }
 # Concurrent sessions a backend keeps isolated (prompt, seed, feedback frame) on
 # one loaded model. A pipeline's capacity may not exceed its backend's limit.
@@ -26,6 +27,7 @@ SESSION_LIMITS = {
     "flux_klein": 1,
     "comfy_workflow": 1,
     "h3_clip": 1,
+    "ffmpeg_filter": 1,
 }
 # Discovery inputs/outputs. Transform backends take a video stream; generators
 # take text and publish their own media.
@@ -33,6 +35,7 @@ BACKEND_IO = {
     "flux_klein": (["video"], ["video"]),
     "comfy_workflow": (["video"], ["video"]),
     "h3_clip": (["text"], ["video", "audio"]),
+    "ffmpeg_filter": (["video"], ["video"]),
 }
 METADATA_LIMIT_BYTES = 1024
 SURFACES = ("stream", "update", "pause", "resume", "stop", "session", "status", "stats")

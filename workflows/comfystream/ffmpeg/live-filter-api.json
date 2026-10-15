@@ -1,0 +1,18 @@
+{
+  "1": {"class_type": "LoadTensor", "inputs": {}},
+  "2": {
+    "class_type": "ImageRotate",
+    "inputs": {"image": ["1", 0], "rotation": "none"}
+  },
+  "3": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": ["2", 0],
+      "upscale_method": "lanczos",
+      "width": 0,
+      "height": 720,
+      "crop": "disabled"
+    }
+  },
+  "5": {"class_type": "SaveTensor", "inputs": {"images": ["3", 0]}}
+}

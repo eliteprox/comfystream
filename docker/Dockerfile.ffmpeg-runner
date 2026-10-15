@@ -1,0 +1,21 @@
+# Comfy-backed ffmpeg capabilities. The base image already has ComfyUI.
+# This overlay replaces the runner source. It does not install an ffmpeg binary.
+FROM comfystream-h3-runner:latest
+
+COPY src /workspace/comfystream/src
+COPY server/ffmpeg_runner.py /workspace/comfystream/server/ffmpeg_runner.py
+COPY workflows/comfystream/ffmpeg /workspace/comfystream/workflows/comfystream/ffmpeg
+COPY configs/realtime-ffmpeg.yaml /workspace/comfystream/configs/realtime-ffmpeg.yaml
+COPY test/test_ffmpeg_tools.py /workspace/comfystream/test/test_ffmpeg_tools.py
+COPY __init__.py /workspace/comfystream/__init__.py
+COPY nodes /workspace/comfystream/nodes
+
+# Folder name must not be "comfystream": that name is the Python package on PYTHONPATH.
+RUN rm -rf /workspace/ComfyUI/custom_nodes/comfystream \
+    && ln -sfn /workspace/comfystream /workspace/ComfyUI/custom_nodes/ComfyStreamNodes
+
+ENV PYTHONPATH=/workspace/comfystream/src \
+    COMFYUI_CWD=/workspace/ComfyUI \
+    COMFYSTREAM_FFMPEG_CONFIG=/workspace/comfystream/configs/realtime-ffmpeg.yaml
+
+ENTRYPOINT ["/workspace/.venv/bin/python", "/workspace/comfystream/server/ffmpeg_runner.py"]

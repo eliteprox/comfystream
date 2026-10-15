@@ -1,0 +1,11 @@
+{
+  "1": {"class_type": "LoadAudio", "inputs": {"audio": "ffmpeg/input.bin"}},
+  "2": {
+    "class_type": "AudioAdjustVolume",
+    "inputs": {"audio": ["1", 0], "volume": 5}
+  },
+  "3": {
+    "class_type": "SaveAudio",
+    "inputs": {"audio": ["2", 0], "filename_prefix": "ffmpeg/loudnorm"}
+  }
+}

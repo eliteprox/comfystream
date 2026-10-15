@@ -1,0 +1,33 @@
+# Live filter graph: LoadTensor -> ImageRotate -> ImageScale -> SaveTensor.
+# The realtime supervisor runs it in its own process through Pipeline.
+# Batch file workflows register from server/ffmpeg_runner.py.
+
+capacity:
+  max_loaded: 1
+
+pipelines:
+  ffmpeg-live:
+    app: comfystream/ffmpeg-live
+    backend: ffmpeg_filter
+    port: 8740
+    gpu: ""
+    policy: warm
+    capacity: 1
+    model: ffmpeg
+    cold_start_s: 30
+    price: 0.000001
+    currency: usd
+    unit: hour
+    label: ffmpeg-live
+    presets:
+      720p:
+        height: 720
+      480p:
+        height: 480
+      360p:
+        height: 360
+    options:
+      width: 1280
+      height: 720
+      workspace: /workspace/ComfyUI
+      params: [height, rotation, flip]

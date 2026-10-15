@@ -1,0 +1,12 @@
+{
+  "1": {"class_type": "LoadVideo", "inputs": {"file": "ffmpeg/input.mp4"}},
+  "2": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
+  "3": {
+    "class_type": "ImageFromBatch",
+    "inputs": {"image": ["2", 0], "batch_index": 0, "length": 1}
+  },
+  "4": {
+    "class_type": "SaveImage",
+    "inputs": {"images": ["3", 0], "filename_prefix": "ffmpeg/frame"}
+  }
+}

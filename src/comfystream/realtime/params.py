@@ -47,6 +47,9 @@ H3_RESOLUTION = Param(
     "Output size. 512x320 is refused on GPUs with 32 GB or less.",
     choices=("448x256", "512x320"),
 )
+FFMPEG_HEIGHT = Param(int, "Output height in pixels. Width follows the frame.", 144, 2160)
+FFMPEG_ROTATION = Param(int, "Clockwise rotation. 0, 90, 180, or 270.", 0, 270)
+FFMPEG_FLIP = Param(str, "Mirror the frame.", choices=("none", "horizontal", "vertical"))
 
 PARAM_SCHEMAS: dict[str, dict[str, Param]] = {
     "flux_klein": {
@@ -62,6 +65,11 @@ PARAM_SCHEMAS: dict[str, dict[str, Param]] = {
         "prompt": H3_PROMPT,
         "seed": H3_SEED,
         "resolution": H3_RESOLUTION,
+    },
+    "ffmpeg_filter": {
+        "height": FFMPEG_HEIGHT,
+        "rotation": FFMPEG_ROTATION,
+        "flip": FFMPEG_FLIP,
     },
 }
 
