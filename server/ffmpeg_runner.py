@@ -19,8 +19,10 @@ from urllib.parse import urlparse
 
 import aiohttp
 from aiohttp import web
+from livepeer_swarm.publisher import SwarmPublisher, SwarmPublishError
 
 from comfystream.ffmpeg.execute import FfmpegJobError
+from comfystream.ffmpeg.swarm import SwarmHold, SwarmProtocolError, file_descriptor
 from comfystream.job_pool import JobPool, PoolSaturatedError
 from comfystream.realtime.spec import load_realtime_config
 from comfystream.realtime.supervisor import RealtimeSupervisor
@@ -170,6 +172,9 @@ class FfmpegRunner:
         self.args = args
         self.supervisor: RealtimeSupervisor | None = None
         self.pool: JobPool | None = None
+        self.bee_url = os.environ.get("BEE_URL", "").strip()
+        self.hold = SwarmHold() if self.bee_url else None
+        self.publisher = SwarmPublisher(self.bee_url or None)
         self._registrations: list[Any] = []
         self._http: aiohttp.ClientSession | None = None
         OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -179,6 +184,7 @@ class FfmpegRunner:
         app.router.add_get("/health", self.handle_health)
         app.router.add_get("/files/{name}", self.handle_file)
         app.router.add_post("/batch/{tool}", self.handle_batch)
+        app.router.add_post("/publish", self.handle_publish)
         app.on_startup.append(self.start)
         app.on_cleanup.append(self.close)
         return app
@@ -234,6 +240,25 @@ class FfmpegRunner:
             )
             self._registrations.append(registration)
             log.info("registered batch app=%s", f"comfystream/ffmpeg-{tool}")
+        if self.bee_url:
+            registration = await register_runner(
+                self.args.orchestrator,
+                secret=self.args.orchSecret,
+                runner_url=f"{runner}/publish",
+                app="comfystream/ffmpeg-publish",
+                mode="single-shot",
+                capacity=1,
+                price=PRICE,
+                currency="usd",
+                unit="fixed",
+                label="ffmpeg-publish",
+                metadata='{"kind":"ffmpeg-swarm-publish","streaming":false}',
+                version="comfystream.ffmpeg.v1",
+                gpu=gpu,
+                auto_detect_gpu=gpu is not None,
+            )
+            self._registrations.append(registration)
+            log.info("registered batch app=comfystream/ffmpeg-publish")
 
     async def close(self, _app: web.Application) -> None:
         for registration in self._registrations:
@@ -248,6 +273,7 @@ class FfmpegRunner:
             await self.pool.close()
         if self._http is not None:
             await self._http.close()
+        await self.publisher.aclose()
 
     async def handle_health(self, _request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "tools": list(BATCH_TOOLS)})
@@ -301,11 +327,15 @@ class FfmpegRunner:
         payload = {key: value for key, value in result.items() if key not in {"data", "suffix", "content_type"}}
         data = result.get("data")
         if isinstance(data, (bytes, bytearray)):
-            suffix = str(result.get("suffix") or ".bin")
-            published = OUTPUT_ROOT / f"{job_id}{suffix}"
-            published.write_bytes(bytes(data))
-            file_info = _public_file(self.args.runner_url, published)
-            file_info["content_type"] = str(result.get("content_type") or file_info["content_type"])
+            content_type = str(result.get("content_type") or "application/octet-stream")
+            if self.hold is None:
+                suffix = str(result.get("suffix") or ".bin")
+                published = OUTPUT_ROOT / f"{job_id}{suffix}"
+                published.write_bytes(bytes(data))
+                file_info = _public_file(self.args.runner_url, published)
+                file_info["content_type"] = content_type
+            else:
+                file_info = file_descriptor(self.hold, bytes(data), content_type, "")
             if tool == "extract-frame":
                 payload["images"] = [file_info]
             elif tool == "loudnorm":
@@ -313,6 +343,35 @@ class FfmpegRunner:
             else:
                 payload["video"] = file_info
         return web.json_response(payload)
+
+    async def handle_publish(self, request: web.Request) -> web.Response:
+        if self.hold is None:
+            return web.json_response(
+                {"error": {"message": "BEE_URL is unset", "status": 404}},
+                status=404,
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": {"message": "body must be JSON", "status": 400}}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"error": {"message": "body must be a JSON object", "status": 400}}, status=400)
+        request_id = body.get("request_id")
+        stamps = body.get("stamps")
+        if not isinstance(request_id, str) or not request_id:
+            return web.json_response({"error": {"message": "request_id is required", "status": 400}}, status=400)
+        if not isinstance(stamps, list):
+            return web.json_response({"error": {"message": "stamps must be a list", "status": 400}}, status=400)
+        try:
+            result = await self.hold.publish(request_id, [str(item) for item in stamps], self.publisher)
+        except SwarmProtocolError as exc:
+            return web.json_response({"error": {"message": exc.message, "status": exc.status}}, status=exc.status)
+        except SwarmPublishError as exc:
+            return web.json_response(
+                {"error": {"message": str(exc), "status": 502}},
+                status=502,
+            )
+        return web.json_response(result)
 
 
 def _batch_worker_init(client_kwargs: dict[str, Any]) -> None:

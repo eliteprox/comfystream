@@ -28,6 +28,7 @@ import hmac
 import importlib
 import json
 import logging
+import os
 import time
 import uuid
 from collections import OrderedDict
@@ -244,6 +245,10 @@ class PipelineWorker:
         self._idle_since = time.monotonic()
         self._idle_task: asyncio.Task | None = None
         self._background: set[asyncio.Task] = set()
+        self._sse_queues: set[asyncio.Queue] = set()
+        self._audio_feeds: dict[str, Any] = {}
+        self._stamp_outputs: dict[str, Any] = {}
+        self._swarm_publisher: Any = None
 
     @property
     def runner_url(self) -> str:
@@ -484,6 +489,9 @@ class PipelineWorker:
         if self.single_shot_registration is not None:
             with suppress(Exception):
                 await self.single_shot_registration.close()
+        if self._swarm_publisher is not None:
+            with suppress(Exception):
+                await self._swarm_publisher.aclose()
         if self.registration is not None:
             with suppress(Exception):
                 await self.registration.close()
@@ -580,6 +588,11 @@ class PipelineWorker:
                     await task
             with suppress(Exception):
                 await current.publisher.close()
+            self._audio_feeds.pop(current.session_id, None)
+            stamp_output = self._stamp_outputs.pop(current.session_id, None)
+            if stamp_output is not None:
+                with suppress(Exception):
+                    await stamp_output.close()
             if current.output is not None:
                 with suppress(Exception):
                     await current.output.close()
@@ -634,6 +647,7 @@ class PipelineWorker:
                 "max_field_size": HEADER_LIMIT_BYTES,
             },
         )
+        app.router.add_get("/sse", self.handle_sse)
         app.router.add_get("/status", self.handle_status)
         app.router.add_get("/health", self.handle_health)
         app.router.add_get("/stats", self.handle_stats)
@@ -815,6 +829,13 @@ class PipelineWorker:
                 {"name": "out", "mime_type": CHANNEL_MIME_VIDEO},
             ]
         )
+        if self._swarm_audio_enabled() and not generator:
+            requested.extend(
+                [
+                    {"name": "stamps", "mime_type": "application/json"},
+                    {"name": "control", "mime_type": "application/json"},
+                ]
+            )
         try:
             channels = await self.registration.create_trickle_channels(request, requested)
         except Exception as exc:
@@ -869,6 +890,7 @@ class PipelineWorker:
                 input_tasks[0].add_done_callback(
                     lambda _task: self._spawn_background(self._drain_input(session))
                 )
+        swarm_urls = self._open_audio_swarm(session, by_name)
         log_event(
             "session.start",
             session=session_id,
@@ -881,8 +903,92 @@ class PipelineWorker:
             **session_request.metadata,
         )
         return web.json_response(
-            session.to_json() | {"estimated_startup_s": estimate, "pipeline": self.pipeline_info()}
+            session.to_json()
+            | {"estimated_startup_s": estimate, "pipeline": self.pipeline_info()}
+            | swarm_urls
         )
+
+    def _swarm_audio_enabled(self) -> bool:
+        return bool(os.environ.get("BEE_URL", "").strip()) and getattr(
+            self.backend, "swarm_audio", False
+        )
+
+    def _swarm_bee(self) -> Any:
+        if self._swarm_publisher is None:
+            from livepeer_swarm.publisher import SwarmPublisher
+
+            self._swarm_publisher = SwarmPublisher(os.environ.get("BEE_URL"))
+        return self._swarm_publisher
+
+    def _open_audio_swarm(self, session: StreamSession, by_name: dict[str, Any]) -> dict[str, str]:
+        """Stamps and control for one-second audio. Video out is unchanged."""
+        if not self._swarm_audio_enabled() or "stamps" not in by_name:
+            return {}
+        from comfystream.ffmpeg.swarm import AudioSwarmSession, LiveAudioFeed
+
+        feed = LiveAudioFeed(AudioSwarmSession(self._swarm_bee(), self._broadcast_sse))
+        self._audio_feeds[session.session_id] = feed
+        subscribe = by_name["stamps"].get("internal_url") or by_name["stamps"]["url"]
+        stamps = self._media_output(
+            subscribe,
+            accepted_content_types=("application/json", "application/octet-stream", "text/plain"),
+            max_segments=8,
+        )
+        self._stamp_outputs[session.session_id] = stamps
+        session.tasks.append(
+            asyncio.create_task(self._read_stamps(feed.session, stamps))
+        )
+        control = by_name.get("control") or {}
+        return {
+            "stamps": by_name["stamps"]["url"],
+            "control": control.get("url", ""),
+        }
+
+    async def _broadcast_sse(self, event: dict[str, Any]) -> None:
+        for queue in list(self._sse_queues):
+            queue.put_nowait(event)
+
+    async def handle_sse(self, request: web.Request) -> web.StreamResponse:
+        queue: asyncio.Queue = asyncio.Queue()
+        self._sse_queues.add(queue)
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+            },
+        )
+        await response.prepare(request)
+        try:
+            while True:
+                event = await queue.get()
+                payload = json.dumps(event, separators=(",", ":"))
+                await response.write(f"data: {payload}\n\n".encode())
+        finally:
+            self._sse_queues.discard(queue)
+        return response
+
+    async def _read_stamps(self, swarm: Any, output: Any) -> None:
+        async for segment in output.segments():
+            reader = segment.make_reader()
+            parts: list[bytes] = []
+            while True:
+                chunk = await reader.read()
+                if not chunk:
+                    break
+                parts.append(chunk)
+            try:
+                body = json.loads(b"".join(parts))
+            except json.JSONDecodeError:
+                log.warning("stamps trickle body is not json")
+                continue
+            if not isinstance(body, dict):
+                continue
+            if "seq" not in body:
+                seq = segment.seq()
+                if seq >= 0:
+                    body = {**body, "seq": seq}
+            await swarm.receive_stamps(body)
 
     def _publisher_config(self) -> MediaPublishConfig:
         if self._is_generator() and hasattr(self.backend, "output_tracks"):
@@ -953,6 +1059,12 @@ class PipelineWorker:
         frame_ready: asyncio.Event,
     ):
         session = self.sessions.get(session_id)
+        if getattr(decoded, "kind", None) == "audio":
+            feed = self._audio_feeds.get(session_id)
+            frame = getattr(decoded, "frame", None)
+            if feed is not None and frame is not None:
+                await feed.push_frame(frame)
+            return
         if decoded.kind != "video" or session is None:
             return
         frame = decoded.frame

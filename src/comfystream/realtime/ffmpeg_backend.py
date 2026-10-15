@@ -27,6 +27,7 @@ class FfmpegWorkflowBackend:
     """Transform backend. One loaded Pipeline, frames in and frames out."""
 
     kind = "transform"
+    swarm_audio = True
 
     def __init__(self, spec: RealtimePipelineSpec):
         options = spec.options

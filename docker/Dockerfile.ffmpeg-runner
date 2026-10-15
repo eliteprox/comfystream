@@ -14,6 +14,12 @@ COPY nodes /workspace/comfystream/nodes
 RUN rm -rf /workspace/ComfyUI/custom_nodes/comfystream \
     && ln -sfn /workspace/comfystream /workspace/ComfyUI/custom_nodes/ComfyStreamNodes
 
+# livepeer-swarm from the merged liverunner + pre-signed upload branch.
+# Import name is livepeer_swarm. The batch key stays on the caller.
+ARG SWARM_REF=af13cd58a4d6e6fd6360ec898df0ae252284b6e5
+RUN /workspace/.venv/bin/python -m pip install --no-cache-dir \
+    "git+https://github.com/eliteprox/runner-app-examples.git@${SWARM_REF}#subdirectory=packages/swarm-publish"
+
 ENV PYTHONPATH=/workspace/comfystream/src \
     COMFYUI_CWD=/workspace/ComfyUI \
     COMFYSTREAM_FFMPEG_CONFIG=/workspace/comfystream/configs/realtime-ffmpeg.yaml

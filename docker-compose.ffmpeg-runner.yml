@@ -17,6 +17,8 @@ services:
       LIVEPEER_ORCH_SECRET: ${LIVEPEER_ORCH_SECRET:?set LIVEPEER_ORCH_SECRET}
       LIVEPEER_RUNNER_URL: ${LIVEPEER_RUNNER_URL:-http://ffmpeg-runner:8994}
       FFMPEG_RUNNER_PORT: "8994"
+      # Empty keeps today's /files URL. Set this to a Bee or `python -m livepeer_swarm.stub`.
+      BEE_URL: ${BEE_URL:-}
     command:
       - --host=0.0.0.0
       - --port=8994
