@@ -18,12 +18,21 @@ WarmPolicy = Literal["warm", "cold"]
 BACKENDS = {
     "flux_klein": "comfystream.realtime.flux_klein_backend:FluxKleinBackend",
     "comfy_workflow": "comfystream.realtime.comfy_backend:ComfyWorkflowBackend",
+    "h3_clip": "comfystream.realtime.h3_backend:H3ClipBackend",
 }
 # Concurrent sessions a backend keeps isolated (prompt, seed, feedback frame) on
 # one loaded model. A pipeline's capacity may not exceed its backend's limit.
 SESSION_LIMITS = {
     "flux_klein": 1,
     "comfy_workflow": 1,
+    "h3_clip": 1,
+}
+# Discovery inputs/outputs. Transform backends take a video stream; generators
+# take text and publish their own media.
+BACKEND_IO = {
+    "flux_klein": (["video"], ["video"]),
+    "comfy_workflow": (["video"], ["video"]),
+    "h3_clip": (["text"], ["video", "audio"]),
 }
 METADATA_LIMIT_BYTES = 1024
 SURFACES = ("stream", "update", "pause", "resume", "stop", "session", "status", "stats")
@@ -40,6 +49,17 @@ def runtime_version() -> str:
 
 class RealtimeSpecError(ValueError):
     """Raised when the realtime pipeline config is invalid."""
+
+
+@dataclass(frozen=True, slots=True)
+class SingleShotSpec:
+    """Optional one-clip route served by the same worker process as the stream."""
+
+    app: str
+    price: float = 0.0
+    currency: str = "usd"
+    unit: str = "fixed"
+    label: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,12 +85,14 @@ class RealtimePipelineSpec:
     fallbacks: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     options: dict[str, Any] = field(default_factory=dict)
+    single_shot: SingleShotSpec | None = None
 
     @property
     def backend_path(self) -> str:
         return BACKENDS[self.backend]
 
     def metadata(self) -> str:
+        inputs, outputs = BACKEND_IO[self.backend]
         payload = json.dumps(
             {
                 "pipeline": self.name,
@@ -79,8 +101,8 @@ class RealtimePipelineSpec:
                 "runtime": runtime_version(),
                 "policy": self.policy,
                 "cold_start_s": self.cold_start_s,
-                "inputs": ["video"],
-                "outputs": ["video"],
+                "inputs": inputs,
+                "outputs": outputs,
                 "streaming": True,
                 "presets": sorted(self.presets),
                 "surfaces": list(SURFACES),
@@ -98,7 +120,11 @@ class RealtimePipelineSpec:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RealtimePipelineSpec":
-        return cls(**data)
+        raw = dict(data)
+        shot = raw.get("single_shot")
+        if isinstance(shot, dict):
+            raw["single_shot"] = SingleShotSpec(**shot)
+        return cls(**raw)
 
 
 def _parse_spec(name: str, raw: Any) -> RealtimePipelineSpec:
@@ -147,9 +173,30 @@ def _parse_spec(name: str, raw: Any) -> RealtimePipelineSpec:
         fallbacks=_parse_fallbacks(name, raw.get("fallbacks") or {}),
         env={str(key): str(value) for key, value in (raw.get("env") or {}).items()},
         options=dict(raw.get("options") or {}),
+        single_shot=_parse_single_shot(name, raw.get("single_shot")),
     )
     spec.metadata()
     return spec
+
+
+def _parse_single_shot(name: str, raw: Any) -> SingleShotSpec | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RealtimeSpecError(f"{name}: single_shot must be a mapping")
+    known = set(SingleShotSpec.__dataclass_fields__)
+    unknown = set(raw) - known
+    if unknown:
+        raise RealtimeSpecError(f"{name}: single_shot unknown keys {sorted(unknown)}")
+    if "app" not in raw:
+        raise RealtimeSpecError(f"{name}: single_shot missing required key 'app'")
+    return SingleShotSpec(
+        app=str(raw["app"]),
+        price=float(raw.get("price", 0.0)),
+        currency=str(raw.get("currency", "usd")),
+        unit=str(raw.get("unit", "fixed")),
+        label=str(raw.get("label", raw["app"])),
+    )
 
 
 def _param_names(raw: dict[str, Any]) -> list[str] | None:
@@ -204,6 +251,7 @@ def load_realtime_config(path: str | Path) -> tuple[list[RealtimePipelineSpec], 
     if len(set(ports)) != len(ports):
         raise RealtimeSpecError(f"{path}: pipeline ports must be unique")
     apps = [spec.app for spec in specs]
+    apps.extend(spec.single_shot.app for spec in specs if spec.single_shot is not None)
     if len(set(apps)) != len(apps):
         raise RealtimeSpecError(f"{path}: pipeline app ids must be unique")
     return specs, parse_capacity(document.get("capacity"), {spec.name for spec in specs})

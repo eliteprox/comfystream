@@ -50,7 +50,7 @@ class StreamSession:
     session_id: str
     in_url: str
     out_url: str
-    output: MediaOutput
+    output: MediaOutput | None
     publisher: MediaPublish
     request: SessionRequest
     # The /stream request; its session headers let the runner release the reservation.
@@ -72,6 +72,7 @@ class StreamSession:
     fallback_total_s: float = 0.0
     inflight_since: float | None = None
     last_pts: int | None = None
+    last_audio_pts: int | None = None
     frames_in: int = 0
     frames_processed: int = 0
     frames_fallback: int = 0
@@ -83,6 +84,7 @@ class StreamSession:
     emit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     frame_ready: asyncio.Event = field(default_factory=asyncio.Event)
     processor_idle: asyncio.Event = field(default_factory=asyncio.Event)
+    publish_url: str = ""
 
     def pause(self) -> bool:
         if self.status != ACTIVE:

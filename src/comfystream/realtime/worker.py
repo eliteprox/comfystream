@@ -29,19 +29,23 @@ import importlib
 import json
 import logging
 import time
+import uuid
 from collections import OrderedDict
 from contextlib import suppress
 from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 import av
+import numpy as np
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
 from livepeer_gateway.errors import LivepeerHTTPError
 from livepeer_gateway.live_runner import register_runner, stop_runner_session
 from livepeer_gateway.media_output import MediaOutput
 from livepeer_gateway.media_publish import MediaPublish, MediaPublishConfig, VideoOutputConfig
 
+from comfystream.capabilities.receipts import response_headers, success_receipt
 from comfystream.realtime.api import (
     ApiError,
     SessionRequest,
@@ -53,7 +57,7 @@ from comfystream.realtime.api import (
 )
 from comfystream.realtime.fallback import FallbackFrames
 from comfystream.realtime.gpu import gpu_usage, pinned_gpu
-from comfystream.realtime.params import schema_json
+from comfystream.realtime.params import ParamError, schema_json, validate_params
 from comfystream.realtime.session import (
     ACTIVE,
     COMPLETED,
@@ -64,7 +68,12 @@ from comfystream.realtime.session import (
     StreamSession,
     usage_record,
 )
-from comfystream.realtime.spec import DEFAULT_FALLBACK, RealtimePipelineSpec, runtime_version
+from comfystream.realtime.spec import (
+    BACKEND_IO,
+    DEFAULT_FALLBACK,
+    RealtimePipelineSpec,
+    runtime_version,
+)
 
 log = logging.getLogger("comfystream.realtime.worker")
 
@@ -128,6 +137,54 @@ class SlotUnavailable(RuntimeError):
     """The supervisor could not free GPU capacity for this pipeline."""
 
 
+class SessionEmit:
+    """Frames a generator backend writes onto one session's publisher."""
+
+    def __init__(
+        self,
+        worker: "PipelineWorker",
+        session: StreamSession,
+        *,
+        fps: int = 24,
+        sample_rate: int = 48000,
+    ):
+        self.worker = worker
+        self.session = session
+        self.fps = fps
+        self.sample_rate = sample_rate
+        self.cursor_s = 0.0
+
+    async def video(self, frame: av.VideoFrame) -> None:
+        await self.worker._emit(self.session, frame)
+        if frame.pts is not None and frame.time_base is not None:
+            self.cursor_s = max(self.cursor_s, float(frame.pts * frame.time_base))
+
+    async def audio(self, frame: av.AudioFrame) -> None:
+        await self.worker._emit_audio(self.session, frame)
+
+    async def fallback(self) -> None:
+        """One slate frame plus silence, so both tracks stay open while clips buffer."""
+        time_base = Fraction(1, self.fps)
+        pts = int(round(self.cursor_s * self.fps))
+        frame = self.worker.fallbacks.frame(self.session.fallback, pts, time_base)
+        await self.worker._emit(self.session, frame)
+        samples = max(1, self.sample_rate // self.fps)
+        silence = av.AudioFrame.from_ndarray(
+            np.zeros((2, samples), dtype=np.float32),
+            format="fltp",
+            layout="stereo",
+        )
+        silence.sample_rate = self.sample_rate
+        silence.pts = int(round(self.cursor_s * self.sample_rate))
+        silence.time_base = Fraction(1, self.sample_rate)
+        await self.worker._emit_audio(self.session, silence)
+        self.cursor_s += 1.0 / self.fps
+
+    async def discontinuity(self, width: int, height: int) -> None:
+        await self.worker._reopen_publisher(self.session, width, height)
+        self.cursor_s = 0.0
+
+
 def load_backend(spec: RealtimePipelineSpec) -> Any:
     module_name, _, attr = spec.backend_path.partition(":")
     return getattr(importlib.import_module(module_name), attr)(spec)
@@ -173,6 +230,8 @@ class PipelineWorker:
         self.sessions: dict[str, StreamSession] = {}
         self.ended: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self.registration: Any = None
+        self.single_shot_registration: Any = None
+        self._generating = 0
         self.advertised_status = config.status
         self.stopped: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         self._media_output = media_output
@@ -190,6 +249,13 @@ class PipelineWorker:
     def runner_url(self) -> str:
         return f"{self.config.runner_host.rstrip('/')}:{self.spec.port}"
 
+    def _occupied(self) -> int:
+        """Live streams plus an in-flight single-shot. Both hold the GPU."""
+        return len(self.sessions) + self._generating
+
+    def _is_generator(self) -> bool:
+        return getattr(self.backend, "kind", "transform") == "generator"
+
     @property
     def compute(self) -> str:
         return COMPUTE_BY_STATE[self.state]
@@ -202,6 +268,19 @@ class PipelineWorker:
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+    def _single_shot_metadata(self) -> str:
+        inputs, outputs = BACKEND_IO[self.spec.backend]
+        return json.dumps(
+            {
+                "pipeline": self.spec.name,
+                "inputs": list(inputs),
+                "outputs": list(outputs),
+                "streaming": False,
+                "runtime": runtime_version(),
+            },
+            separators=(",", ":"),
+        )
 
     def registration_metadata(self) -> str:
         """Static capability fields plus the live compute state discovery should show."""
@@ -249,7 +328,7 @@ class PipelineWorker:
             # Monotonic across processes on one host, so a stale report never wins.
             "seq": time.monotonic_ns(),
             "state": self.state,
-            "sessions": len(self.sessions),
+            "sessions": self._occupied(),
             "starting": self._starting > 0,
         }
         self._spawn_background(self._post_report(report))
@@ -268,7 +347,7 @@ class PipelineWorker:
 
     async def advertise(self, status: str) -> None:
         """Set the registration status; a pipeline holding sessions always stays routable."""
-        if status != STATUS_READY and self.sessions:
+        if status != STATUS_READY and self._occupied():
             return
         if status == self.advertised_status:
             return
@@ -365,6 +444,22 @@ class PipelineWorker:
             gpu=pinned_gpu(),
             on_session_release=self._on_session_release,
         )
+        shot = self.spec.single_shot
+        if shot is not None:
+            self.single_shot_registration = await register_runner(
+                self.config.orchestrator,
+                secret=self.config.orch_secret,
+                runner_url=f"{self.runner_url}/generate",
+                app=shot.app,
+                mode="single-shot",
+                capacity=1,
+                price=shot.price,
+                currency=shot.currency,
+                unit=shot.unit,
+                label=shot.label or shot.app,
+                metadata=self._single_shot_metadata(),
+                gpu=pinned_gpu(),
+            )
         self._report()
         log_event(
             "capability.registered",
@@ -386,6 +481,9 @@ class PipelineWorker:
         await self.end_all(STOPPED, "worker_shutdown")
         if self._background:
             await asyncio.gather(*self._background, return_exceptions=True)
+        if self.single_shot_registration is not None:
+            with suppress(Exception):
+                await self.single_shot_registration.close()
         if self.registration is not None:
             with suppress(Exception):
                 await self.registration.close()
@@ -482,8 +580,9 @@ class PipelineWorker:
                     await task
             with suppress(Exception):
                 await current.publisher.close()
-            with suppress(Exception):
-                await current.output.close()
+            if current.output is not None:
+                with suppress(Exception):
+                    await current.output.close()
             try:
                 await self.backend.scrub(current.session_id)
             except Exception:
@@ -544,6 +643,7 @@ class PipelineWorker:
         app.router.add_post("/pause", self.handle_pause)
         app.router.add_post("/resume", self.handle_resume)
         app.router.add_post("/stop", self.handle_stop)
+        app.router.add_post("/generate", self.handle_generate)
         app.router.add_post(SHUTDOWN_PATH, self.handle_shutdown)
         app.router.add_post(EVICT_PATH, self.handle_evict)
         app.router.add_post(ADVERTISE_PATH, self.handle_advertise)
@@ -560,7 +660,7 @@ class PipelineWorker:
             "policy": self.spec.policy,
             "advertised_status": self.advertised_status,
             "capacity": self.spec.capacity,
-            "capacity_used": len(self.sessions),
+            "capacity_used": self._occupied(),
             "sessions": sorted(self.sessions),
             "error": self.error,
             "pipeline": self.pipeline_info(),
@@ -592,6 +692,7 @@ class PipelineWorker:
             raise web.HTTPNotFound()
         if (
             self._starting
+            or self._generating
             or self._session_lock.locked()
             or self.sessions
             or self.state == "loading"
@@ -646,6 +747,12 @@ class PipelineWorker:
         existing = self.sessions.get(session_id)
         if existing is not None:
             return web.json_response(existing.to_json())
+        if self._generating:
+            raise ApiError(
+                409,
+                "session_conflict",
+                "a single-shot generation is using this pipeline",
+            )
         if len(self.sessions) >= self.spec.capacity:
             raise ApiError(
                 409,
@@ -693,42 +800,47 @@ class PipelineWorker:
             self.backend.reset()
         try:
             await self.backend.apply(params, session_id)
+        except ParamError as exc:
+            raise ApiError(400, exc.code, exc.message, exc.field) from exc
         except Exception as exc:
             log.exception("applying session params failed pipeline=%s", self.spec.name)
             raise ApiError(500, "pipeline_error", "could not apply session params") from exc
 
+        generator = self._is_generator()
+        requested = (
+            [{"name": "out", "mime_type": CHANNEL_MIME_VIDEO}]
+            if generator
+            else [
+                {"name": "in", "mime_type": CHANNEL_MIME_VIDEO},
+                {"name": "out", "mime_type": CHANNEL_MIME_VIDEO},
+            ]
+        )
         try:
-            channels = await self.registration.create_trickle_channels(
-                request,
-                [
-                    {"name": "in", "mime_type": CHANNEL_MIME_VIDEO},
-                    {"name": "out", "mime_type": CHANNEL_MIME_VIDEO},
-                ],
-            )
+            channels = await self.registration.create_trickle_channels(request, requested)
         except Exception as exc:
             log.exception("creating trickle channels failed pipeline=%s", self.spec.name)
             raise ApiError(502, "orchestrator_error", "could not create stream channels") from exc
         by_name = {channel["name"]: channel for channel in channels}
-        if "in" not in by_name or "out" not in by_name:
-            raise ApiError(502, "orchestrator_error", "orchestrator did not return in/out channels")
+        needed = {"out"} if generator else {"in", "out"}
+        if not needed <= set(by_name):
+            raise ApiError(502, "orchestrator_error", "orchestrator did not return stream channels")
 
-        publisher = self._media_publish(
-            by_name["out"].get("internal_url") or by_name["out"]["url"],
-            config=MediaPublishConfig(
-                tracks=[VideoOutputConfig(fps=30.0, keyframe_interval_s=0.25)],
-                min_segment_wallclock_s=0.25,
-            ),
-        )
+        out_url = by_name["out"].get("internal_url") or by_name["out"]["url"]
+        publisher = self._open_publisher(out_url)
         latest: list[av.VideoFrame] = []
         frame_ready = asyncio.Event()
-        output = self._media_output(
-            by_name["in"].get("internal_url") or by_name["in"]["url"],
-            on_frame=lambda decoded: self._on_frame(session_id, decoded, latest, frame_ready),
-            max_segments=2,
-        )
+        output = None
+        in_url = ""
+        if not generator:
+            in_url = by_name["in"]["url"]
+            output = self._media_output(
+                by_name["in"].get("internal_url") or in_url,
+                on_frame=lambda decoded: self._on_frame(session_id, decoded, latest, frame_ready),
+                max_segments=2,
+            )
         session = StreamSession(
             session_id=session_id,
-            in_url=by_name["in"]["url"],
+            in_url=in_url,
             out_url=by_name["out"]["url"],
             output=output,
             publisher=publisher,
@@ -741,16 +853,22 @@ class PipelineWorker:
             fallback=session_request.fallback,
             frame_ready=frame_ready,
         )
+        session.publish_url = out_url
         self.sessions[session_id] = session
         self._report()
-        processor = asyncio.create_task(self._process_latest(session, latest, frame_ready))
+        if generator:
+            emit = SessionEmit(self, session)
+            processor = asyncio.create_task(self.backend.generate(session, emit))
+        else:
+            processor = asyncio.create_task(self._process_latest(session, latest, frame_ready))
         session.tasks = [processor, asyncio.create_task(self._watch_session(session))]
         processor.add_done_callback(lambda task: self._on_processor_done(session, task))
-        input_tasks = output.callback_tasks()
-        if input_tasks:
-            input_tasks[0].add_done_callback(
-                lambda _task: self._spawn_background(self._drain_input(session))
-            )
+        if output is not None:
+            input_tasks = output.callback_tasks()
+            if input_tasks:
+                input_tasks[0].add_done_callback(
+                    lambda _task: self._spawn_background(self._drain_input(session))
+                )
         log_event(
             "session.start",
             session=session_id,
@@ -766,6 +884,27 @@ class PipelineWorker:
             session.to_json() | {"estimated_startup_s": estimate, "pipeline": self.pipeline_info()}
         )
 
+    def _publisher_config(self) -> MediaPublishConfig:
+        if self._is_generator() and hasattr(self.backend, "output_tracks"):
+            tracks = self.backend.output_tracks()
+        else:
+            tracks = [VideoOutputConfig(fps=30.0, keyframe_interval_s=0.25)]
+        return MediaPublishConfig(tracks=tracks, min_segment_wallclock_s=0.25)
+
+    def _open_publisher(self, url: str):
+        return self._media_publish(url, config=self._publisher_config())
+
+    async def _reopen_publisher(self, session: StreamSession, width: int, height: int) -> None:
+        """Close the muxer so the next clip is a resolution discontinuity."""
+        with suppress(Exception):
+            await session.publisher.close()
+        session.last_pts = None
+        session.last_audio_pts = None
+        self.backend.width = width
+        self.backend.height = height
+        self.fallbacks = FallbackFrames(self.spec.fallbacks, width, height)
+        session.publisher = self._open_publisher(session.publish_url or session.out_url)
+
     async def _emit(self, session: StreamSession, frame: av.VideoFrame) -> None:
         async with session.emit_lock:
             if (
@@ -776,6 +915,18 @@ class PipelineWorker:
                 return
             if frame.pts is not None:
                 session.last_pts = frame.pts
+            await session.publisher.write_frame(frame)
+
+    async def _emit_audio(self, session: StreamSession, frame: av.AudioFrame) -> None:
+        async with session.emit_lock:
+            if (
+                frame.pts is not None
+                and session.last_audio_pts is not None
+                and frame.pts <= session.last_audio_pts
+            ):
+                return
+            if frame.pts is not None:
+                session.last_audio_pts = frame.pts
             await session.publisher.write_frame(frame)
 
     async def _emit_fallback(self, session: StreamSession, source: av.VideoFrame) -> None:
@@ -888,6 +1039,9 @@ class PipelineWorker:
 
     async def _watch_session(self, session: StreamSession) -> None:
         requested = session.request.idle_timeout_s
+        if self._is_generator() and requested is None:
+            # A generator has no input to go idle on. It ends on /stop or release.
+            return
         timeout = (
             requested
             if requested is not None
@@ -947,6 +1101,70 @@ class PipelineWorker:
             return web.json_response(self.ended[session_id] | {"already_stopped": True})
         raise ApiError(404, "session_not_found", "no session with this id")
 
+    async def handle_generate(self, request: web.Request) -> web.Response:
+        """One clip on the single-shot app. Shares the loaded model with /stream."""
+        if self.spec.single_shot is None:
+            raise ApiError(404, "not_found", "this pipeline has no single-shot route")
+        body = await read_json_object(request)
+        names = self.spec.options.get("params")
+        try:
+            params = validate_params(self.spec.backend, body, names if isinstance(names, list) else None)
+        except ParamError as exc:
+            raise ApiError(400, exc.code, exc.message, exc.field) from exc
+        async with self._session_lock:
+            if self.stopped.done():
+                raise ApiError(503, "runner_unavailable", "pipeline is unloading", compute="cold")
+            if self._occupied():
+                raise ApiError(
+                    503,
+                    "capacity_unavailable",
+                    "pipeline is busy",
+                    compute=self.compute,
+                )
+            self._generating += 1
+            self._report()
+        path = None
+        try:
+            try:
+                await self.ensure_loaded()
+            except SlotUnavailable as exc:
+                raise ApiError(503, "capacity_unavailable", str(exc), compute=self.compute) from exc
+            except Exception as exc:
+                self.stop(EXIT_ERROR)
+                raise ApiError(
+                    503, "runner_unavailable", "pipeline failed to load", compute="unavailable"
+                ) from exc
+            merged = self.backend.defaults() | params
+            try:
+                path = await self.backend.generate_once(merged)
+            except ParamError as exc:
+                raise ApiError(400, exc.code, exc.message, exc.field) from exc
+            except Exception as exc:
+                log.exception("single-shot generation failed pipeline=%s", self.spec.name)
+                raise ApiError(500, "pipeline_error", "could not generate the clip") from exc
+        finally:
+            async with self._session_lock:
+                self._generating -= 1
+                self._report()
+                if not self.sessions:
+                    try:
+                        await self.backend.idle()
+                    except Exception:
+                        log.exception("idling pipeline=%s after single-shot failed", self.spec.name)
+                    self._idle_since = time.monotonic()
+        clip = Path(path)
+        digest = getattr(self.backend, "workflow_sha256", "") or ""
+        request_id = uuid.uuid4().hex
+        receipt = success_receipt(
+            endpoint_id=self.spec.single_shot.app,
+            request_id=request_id,
+            schema_sha256=digest,
+            output={"video": {"path": str(clip), "bytes": clip.stat().st_size}},
+            billable_units=1,
+            billable_units_source="comfystream-local",
+        )
+        return web.json_response(receipt, headers=response_headers(request_id))
+
     async def handle_session(self, request: web.Request) -> web.Response:
         session_id = session_id_from(request)
         session = self.sessions.get(session_id)
@@ -965,7 +1183,10 @@ class PipelineWorker:
             session = next(iter(self.sessions.values())) if len(self.sessions) == 1 else None
         if session is None:
             return web.json_response(self.status_payload())
-        in_stats = session.output.get_stats()
+        if session.output is None:
+            in_stats = {}
+        else:
+            in_stats = session.output.get_stats()
         if asyncio.iscoroutine(in_stats):
             in_stats = await in_stats
         out_stats = session.publisher.get_stats()

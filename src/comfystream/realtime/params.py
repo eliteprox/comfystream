@@ -20,6 +20,8 @@ class Param:
     minimum: float | None = None
     maximum: float | None = None
     allow_empty: bool = False
+    max_chars: int | None = None
+    choices: tuple[str, ...] | None = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.kind.__name__, "description": self.description}
@@ -27,6 +29,10 @@ class Param:
             out["minimum"] = self.minimum
         if self.maximum is not None:
             out["maximum"] = self.maximum
+        if self.max_chars is not None:
+            out["max_chars"] = self.max_chars
+        if self.choices is not None:
+            out["choices"] = list(self.choices)
         return out
 
 
@@ -34,6 +40,13 @@ PROMPT = Param(str, "What the visuals should look like.")
 NEGATIVE_PROMPT = Param(str, "What to steer away from.", allow_empty=True)
 SEED = Param(int, "Noise seed; -1 picks fresh noise every frame.", -1, SEED_MAX)
 INPUT_BLEND = Param(float, "Camera weight in the feedback loop (0 = prompt only).", 0.0, 1.0)
+H3_PROMPT = Param(str, "What the clip should show.", max_chars=12000)
+H3_SEED = Param(int, "Noise seed; -1 picks a fresh seed for the clip.", -1, 2**32 - 1)
+H3_RESOLUTION = Param(
+    str,
+    "Output size. 512x320 is refused on GPUs with 32 GB or less.",
+    choices=("448x256", "512x320"),
+)
 
 PARAM_SCHEMAS: dict[str, dict[str, Param]] = {
     "flux_klein": {
@@ -44,6 +57,11 @@ PARAM_SCHEMAS: dict[str, dict[str, Param]] = {
     "comfy_workflow": {
         "prompt": PROMPT,
         "negative_prompt": NEGATIVE_PROMPT,
+    },
+    "h3_clip": {
+        "prompt": H3_PROMPT,
+        "seed": H3_SEED,
+        "resolution": H3_RESOLUTION,
     },
 }
 
@@ -63,9 +81,14 @@ def _coerce(name: str, param: Param, value: Any) -> Any:
         value = value.strip()
         if not value and not param.allow_empty:
             raise ParamError("invalid_param", name, f"{name} must not be empty")
-        if len(value) > MAX_TEXT_CHARS:
+        limit = param.max_chars if param.max_chars is not None else MAX_TEXT_CHARS
+        if len(value) > limit:
             raise ParamError(
-                "invalid_param", name, f"{name} must be at most {MAX_TEXT_CHARS} characters"
+                "invalid_param", name, f"{name} must be at most {limit} characters"
+            )
+        if param.choices is not None and value not in param.choices:
+            raise ParamError(
+                "invalid_param", name, f"{name} must be one of {list(param.choices)}"
             )
         return value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -90,6 +113,8 @@ def schema_for(backend: str, names: list[str] | None = None) -> dict[str, Param]
     catalog: dict[str, Param] = {}
     for schema in PARAM_SCHEMAS.values():
         catalog.update(schema)
+    # The backend's own definition wins when names are shared (prompt length differs).
+    catalog.update(PARAM_SCHEMAS[backend])
     missing = [name for name in names if name not in catalog]
     if missing:
         raise ParamError(

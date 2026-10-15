@@ -15,10 +15,11 @@ def success_receipt(
     schema_sha256: str,
     output: dict[str, Any],
     billable_units: float | int | None = None,
+    billable_units_source: str = BILLABLE_UNITS_SOURCE,
 ) -> dict[str, Any]:
     return {
         "billable_units": billable_units,
-        "billable_units_source": BILLABLE_UNITS_SOURCE,
+        "billable_units_source": billable_units_source,
         "endpoint_id": endpoint_id,
         "output": output,
         "request_id": request_id,
