@@ -24,4 +24,9 @@ ENV PYTHONPATH=/workspace/comfystream/src \
     COMFYUI_CWD=/workspace/ComfyUI \
     COMFYSTREAM_FFMPEG_CONFIG=/workspace/comfystream/configs/realtime-ffmpeg.yaml
 
+# Spawned Comfy workers do not run the batch initializer. This import hook
+# pins their input directory before LoadImage validation.
+RUN printf '%s\n' 'import comfystream_ffmpeg_paths' \
+    > /workspace/.venv/lib/python3.12/site-packages/comfystream-ffmpeg-paths.pth
+
 ENTRYPOINT ["/workspace/.venv/bin/python", "/workspace/comfystream/server/ffmpeg_runner.py"]

@@ -12,10 +12,13 @@ services:
     image: comfystream-ffmpeg-runner:latest
     container_name: ffmpeg-runner
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8994:8994"
     environment:
       LIVEPEER_ORCH_URL: ${LIVEPEER_ORCH_URL:-https://hky.eliteencoder.net:8936}
       LIVEPEER_ORCH_SECRET: ${LIVEPEER_ORCH_SECRET:?set LIVEPEER_ORCH_SECRET}
       LIVEPEER_RUNNER_URL: ${LIVEPEER_RUNNER_URL:-http://ffmpeg-runner:8994}
+      FFMPEG_PUBLIC_URL: ${FFMPEG_PUBLIC_URL:-https://hky.eliteencoder.net:8936/ffmpeg}
       FFMPEG_RUNNER_PORT: "8994"
       # Empty keeps today's /files URL. Set this to a Bee or `python -m livepeer_swarm.stub`.
       BEE_URL: ${BEE_URL:-}

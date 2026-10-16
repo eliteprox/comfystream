@@ -8,6 +8,7 @@ so LoadVideo and LoadAudio can see them.
 from __future__ import annotations
 
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -62,7 +63,9 @@ def run_job(
     }
 
 
-def _prompt(tool: str, staged: dict[str, Any], prefix: str, params: dict[str, Any]) -> dict[str, Any]:
+def _prompt(
+    tool: str, staged: dict[str, Any], prefix: str, params: dict[str, Any]
+) -> dict[str, Any]:
     if tool == "scale-video":
         return scale_video(
             staged["video"],
@@ -105,7 +108,7 @@ def _prompt(tool: str, staged: dict[str, Any], prefix: str, params: dict[str, An
             float(params.get("fps") or 4),
         )
     if tool == "compose":
-        return compose(list(staged["clips"]), prefix)
+        return compose(list(staged["sequence"]), prefix, float(params.get("fps") or 4))
     raise FfmpegJobError(f"unknown ffmpeg tool {tool}", status=404)
 
 
@@ -118,15 +121,72 @@ def _stage(folder: Path, job_id: str, files: dict[str, Any]) -> dict[str, Any]:
             staged[key] = f"ffmpeg/{name}"
         elif isinstance(value, list):
             names = []
+            image_dir = folder.parent
+            image_dir.mkdir(parents=True, exist_ok=True)
             for index, item in enumerate(value):
+                if key == "sequence":
+                    kind = item[0]
+                    payload = bytes(item[1])
+                    if kind == "image":
+                        payload = _even_image(payload)
+                        name = f"{job_id}-image-{index}{_image_suffix(payload)}"
+                        (image_dir / name).write_bytes(payload)
+                        names.append(("image", name, int(item[2])))
+                    else:
+                        name = f"{job_id}-clip-{index}.mp4"
+                        (folder / name).write_bytes(payload)
+                        names.append(("video", f"ffmpeg/{name}"))
+                    continue
                 payload, extra = item if isinstance(item, tuple) else (item, 1)
-                name = f"{job_id}-{key}-{index}.bin"
-                (folder / name).write_bytes(bytes(payload))
-                names.append((f"ffmpeg/{name}", extra) if key == "images" else f"ffmpeg/{name}")
+                payload = bytes(payload)
+                if key == "images":
+                    payload = _even_image(payload)
+                    name = f"{job_id}-{key}-{index}{_image_suffix(payload)}"
+                    (image_dir / name).write_bytes(payload)
+                    names.append((name, extra))
+                else:
+                    name = f"{job_id}-{key}-{index}.bin"
+                    (folder / name).write_bytes(payload)
+                    names.append(f"ffmpeg/{name}")
             staged[key] = names
         else:
             raise FfmpegJobError(f"missing bytes for {key}")
     return staged
+
+
+def _even_image(payload: bytes) -> bytes:
+    """Pad an odd width or height by one pixel.
+
+    SaveVideo opens libx264 with yuv420p, and that encoder rejects odd sizes.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return payload
+    try:
+        with Image.open(BytesIO(payload)) as image:
+            width, height = image.size
+            if width % 2 == 0 and height % 2 == 0:
+                return payload
+            canvas = Image.new(image.mode, (width + (width % 2), height + (height % 2)))
+            canvas.paste(image, (0, 0))
+            out = BytesIO()
+            canvas.save(out, format=image.format or "PNG")
+            return out.getvalue()
+    except Exception:
+        return payload
+
+
+def _image_suffix(payload: bytes) -> str:
+    if payload.startswith(b"\x89PNG"):
+        return ".png"
+    if payload.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if payload.startswith(b"GIF8"):
+        return ".gif"
+    if payload.startswith(b"RIFF") and payload[8:12] == b"WEBP":
+        return ".webp"
+    return ".png"
 
 
 def _find_output(output_dir: Path, job_id: str) -> Path | None:

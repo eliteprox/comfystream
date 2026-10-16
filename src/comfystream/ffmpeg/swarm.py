@@ -17,9 +17,10 @@ from typing import Any, Awaitable, Callable
 import av
 from livepeer_swarm.bmt import chunk_address, chunk_data, pyramid
 from livepeer_swarm.frame import pack
-from livepeer_swarm.playback import playback_url
 from livepeer_swarm.publisher import SwarmPublisher, SwarmPublishError
 from livepeer_swarm.stamp import STAMP_SIZE, StampedChunk
+
+PUBLIC_GATEWAY = "https://bzz.limo"
 
 log = logging.getLogger("comfystream.ffmpeg.swarm")
 
@@ -52,7 +53,9 @@ class SwarmHold:
     _items: dict[str, _Held] = field(default_factory=dict)
     _order: deque[str] = field(default_factory=deque)
 
-    def offer(self, data: bytes, content_type: str, request_id: str | None = None) -> dict[str, Any]:
+    def offer(
+        self, data: bytes, content_type: str, request_id: str | None = None
+    ) -> dict[str, Any]:
         self._expire()
         request_id = request_id or uuid.uuid4().hex
         chunks = pyramid(data)
@@ -121,7 +124,9 @@ class SwarmHold:
         self._order = deque(key for key in self._order if key != request_id)
 
 
-def file_descriptor(hold: SwarmHold | None, data: bytes, content_type: str, url: str) -> dict[str, Any]:
+def file_descriptor(
+    hold: SwarmHold | None, data: bytes, content_type: str, url: str
+) -> dict[str, Any]:
     """Swarm address object when a hold is configured, otherwise a file URL."""
     if hold is None:
         return {"url": url, "content_type": content_type, "file_size": len(data)}
@@ -274,6 +279,13 @@ def encode_aac(frames: list[av.AudioFrame]) -> bytes:
     finally:
         container.close()
     return buffer.getvalue()
+
+
+def playback_url(reference: str, ext: str = ".aac", gateway: str = PUBLIC_GATEWAY) -> str:
+    """Public Bee URL. Same shape as Donkey's Playlist.swarmUri."""
+    suffix = ext if ext.startswith(".") else f".{ext}"
+    text = reference[2:] if reference.startswith(("0x", "0X")) else reference
+    return f"{gateway.rstrip('/')}/bytes/{text.lower()}?x={suffix}"
 
 
 def _playback_ext(content_type: str) -> str:

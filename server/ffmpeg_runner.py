@@ -22,6 +22,7 @@ from aiohttp import web
 from livepeer_swarm.publisher import SwarmPublisher, SwarmPublishError
 
 from comfystream.ffmpeg.execute import FfmpegJobError
+from comfystream.ffmpeg.schemas import registration_metadata, schema_bytes
 from comfystream.ffmpeg.swarm import SwarmHold, SwarmProtocolError, file_descriptor
 from comfystream.job_pool import JobPool, PoolSaturatedError
 from comfystream.realtime.spec import load_realtime_config
@@ -50,7 +51,9 @@ OUTPUT_ROOT = Path(os.environ.get("FFMPEG_OUTPUT_DIR", "/tmp/comfystream-ffmpeg"
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local ffmpeg streaming and batch runner")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=int(os.environ.get("FFMPEG_RUNNER_PORT", "8994")))
+    parser.add_argument(
+        "--port", type=int, default=int(os.environ.get("FFMPEG_RUNNER_PORT", "8994"))
+    )
     parser.add_argument(
         "--orchestrator",
         default=os.environ.get("LIVEPEER_ORCH_URL", "https://localhost:8935"),
@@ -90,6 +93,15 @@ async def _download(session: aiohttp.ClientSession, url: str, dest: Path) -> Pat
     return dest
 
 
+def _is_image(payload: bytes) -> bool:
+    return (
+        payload.startswith(b"\x89PNG")
+        or payload.startswith(b"\xff\xd8\xff")
+        or payload.startswith(b"GIF8")
+        or (len(payload) >= 12 and payload.startswith(b"RIFF") and payload[8:12] == b"WEBP")
+    )
+
+
 def _require(body: dict[str, Any], key: str) -> str:
     value = body.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -97,7 +109,9 @@ def _require(body: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
-async def _collect(session: aiohttp.ClientSession, tool: str, body: dict[str, Any], work: Path) -> dict[str, Any]:
+async def _collect(
+    session: aiohttp.ClientSession, tool: str, body: dict[str, Any], work: Path
+) -> dict[str, Any]:
     if tool in {"scale-video", "trim-video", "extract-frame"}:
         path = await _download(session, _require(body, "video_url"), work / "input.mp4")
         return {"video": path.read_bytes()}
@@ -141,26 +155,46 @@ async def _collect(session: aiohttp.ClientSession, tool: str, body: dict[str, An
         tracks = body.get("tracks")
         if not isinstance(tracks, list) or not tracks:
             raise FfmpegJobError("tracks is required")
-        clips = []
+        sequence = []
         index = 0
+        fps = float(body.get("fps") or 4)
         for track in tracks:
             if not isinstance(track, dict):
                 raise FfmpegJobError("each track must be an object")
-            if str(track.get("type") or "video") == "audio":
+            kind = str(track.get("type") or "video")
+            if kind == "audio":
                 continue
             for keyframe in track.get("keyframes") or []:
                 if not isinstance(keyframe, dict):
                     continue
                 url = _require(keyframe, "url")
-                clips.append((await _download(session, url, work / f"clip-{index}.mp4")).read_bytes())
+                payload = (await _download(session, url, work / f"clip-{index}.bin")).read_bytes()
                 index += 1
-        return {"clips": clips}
+                if kind == "image" or _is_image(payload):
+                    duration_ms = float(keyframe.get("duration") or 0)
+                    frames = (
+                        max(1, int(round(duration_ms / 1000.0 * fps))) if duration_ms > 0 else 1
+                    )
+                    sequence.append(("image", payload, frames))
+                else:
+                    sequence.append(("video", payload))
+        if not sequence:
+            raise FfmpegJobError("tracks need a video or image keyframe")
+        return {"sequence": sequence}
     raise FfmpegJobError(f"unknown ffmpeg tool {tool}", status=404)
 
 
 def _public_file(runner_url: str, path: Path) -> dict[str, Any]:
+    """File URL for the caller.
+
+    ``runner_url`` is the Docker address the orchestrator uses. Browsers cannot
+    open that name. ``FFMPEG_PUBLIC_URL`` is the public prefix nginx serves,
+    without a trailing ``/files`` segment.
+    """
+    public = os.environ.get("FFMPEG_PUBLIC_URL", "").strip()
+    base = public or f"{runner_url.rstrip('/')}/files"
     return {
-        "url": f"{runner_url.rstrip('/')}/files/{path.name}",
+        "url": f"{base.rstrip('/')}/{path.name}",
         "content_type": "video/mp4" if path.suffix == ".mp4" else "application/octet-stream",
         "file_name": path.name,
         "file_size": path.stat().st_size,
@@ -183,6 +217,8 @@ class FfmpegRunner:
         app = web.Application(client_max_size=MAX_MEDIA_BYTES + 1024 * 1024)
         app.router.add_get("/health", self.handle_health)
         app.router.add_get("/files/{name}", self.handle_file)
+        app.router.add_get("/batch/{tool}/schema", self.handle_schema)
+        app.router.add_get("/publish/schema", self.handle_publish_schema)
         app.router.add_post("/batch/{tool}", self.handle_batch)
         app.router.add_post("/publish", self.handle_publish)
         app.on_startup.append(self.start)
@@ -190,11 +226,20 @@ class FfmpegRunner:
         return app
 
     async def start(self, _app: web.Application) -> None:
-        self._http = aiohttp.ClientSession()
+        self._http = aiohttp.ClientSession(headers={"User-Agent": "comfystream-ffmpeg"})
         self.pool = JobPool(
             max_workers=1,
             initializer=_batch_worker_init,
-            initargs=({"cwd": WORKSPACE, "disable_cuda_malloc": True, "gpu_only": False, "preview_method": "none"},),
+            initargs=(
+                {
+                    "cwd": WORKSPACE,
+                    "input_directory": str(Path(WORKSPACE) / "input"),
+                    "output_directory": str(Path(WORKSPACE) / "output"),
+                    "disable_cuda_malloc": True,
+                    "gpu_only": False,
+                    "preview_method": "none",
+                },
+            ),
             pool_worker=_batch_worker_execute,
             timeout_message="ffmpeg workflow deadline exceeded",
         )
@@ -231,9 +276,7 @@ class FfmpegRunner:
                 currency="usd",
                 unit="fixed",
                 label=tool,
-                metadata=(
-                    '{"kind":"ffmpeg-batch","tool":"%s","streaming":false}' % tool
-                ),
+                metadata=registration_metadata(tool),
                 version="comfystream.ffmpeg.v1",
                 gpu=gpu,
                 auto_detect_gpu=gpu is not None,
@@ -252,7 +295,7 @@ class FfmpegRunner:
                 currency="usd",
                 unit="fixed",
                 label="ffmpeg-publish",
-                metadata='{"kind":"ffmpeg-swarm-publish","streaming":false}',
+                metadata=registration_metadata("publish"),
                 version="comfystream.ffmpeg.v1",
                 gpu=gpu,
                 auto_detect_gpu=gpu is not None,
@@ -278,6 +321,15 @@ class FfmpegRunner:
     async def handle_health(self, _request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "tools": list(BATCH_TOOLS)})
 
+    async def handle_schema(self, request: web.Request) -> web.Response:
+        tool = request.match_info["tool"]
+        if tool not in BATCH_TOOLS:
+            raise web.HTTPNotFound()
+        return web.Response(body=schema_bytes(tool), content_type="application/json")
+
+    async def handle_publish_schema(self, _request: web.Request) -> web.Response:
+        return web.Response(body=schema_bytes("publish"), content_type="application/json")
+
     async def handle_file(self, request: web.Request) -> web.Response:
         name = request.match_info["name"]
         if "/" in name or name.startswith("."):
@@ -290,13 +342,19 @@ class FfmpegRunner:
     async def handle_batch(self, request: web.Request) -> web.Response:
         tool = request.match_info["tool"]
         if tool not in BATCH_TOOLS:
-            return web.json_response({"error": {"message": f"unknown tool {tool}", "status": 404}}, status=404)
+            return web.json_response(
+                {"error": {"message": f"unknown tool {tool}", "status": 404}}, status=404
+            )
         try:
             body = await request.json()
         except Exception:
-            return web.json_response({"error": {"message": "body must be JSON", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "body must be JSON", "status": 400}}, status=400
+            )
         if not isinstance(body, dict):
-            return web.json_response({"error": {"message": "body must be a JSON object", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "body must be a JSON object", "status": 400}}, status=400
+            )
         job_id = uuid.uuid4().hex
         work = OUTPUT_ROOT / job_id
         try:
@@ -324,7 +382,11 @@ class FfmpegRunner:
         if isinstance(result, dict) and "error" in result:
             status = int(result["error"].get("status") or 500)
             return web.json_response(result, status=status)
-        payload = {key: value for key, value in result.items() if key not in {"data", "suffix", "content_type"}}
+        payload = {
+            key: value
+            for key, value in result.items()
+            if key not in {"data", "suffix", "content_type"}
+        }
         data = result.get("data")
         if isinstance(data, (bytes, bytearray)):
             content_type = str(result.get("content_type") or "application/octet-stream")
@@ -353,19 +415,31 @@ class FfmpegRunner:
         try:
             body = await request.json()
         except Exception:
-            return web.json_response({"error": {"message": "body must be JSON", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "body must be JSON", "status": 400}}, status=400
+            )
         if not isinstance(body, dict):
-            return web.json_response({"error": {"message": "body must be a JSON object", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "body must be a JSON object", "status": 400}}, status=400
+            )
         request_id = body.get("request_id")
         stamps = body.get("stamps")
         if not isinstance(request_id, str) or not request_id:
-            return web.json_response({"error": {"message": "request_id is required", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "request_id is required", "status": 400}}, status=400
+            )
         if not isinstance(stamps, list):
-            return web.json_response({"error": {"message": "stamps must be a list", "status": 400}}, status=400)
+            return web.json_response(
+                {"error": {"message": "stamps must be a list", "status": 400}}, status=400
+            )
         try:
-            result = await self.hold.publish(request_id, [str(item) for item in stamps], self.publisher)
+            result = await self.hold.publish(
+                request_id, [str(item) for item in stamps], self.publisher
+            )
         except SwarmProtocolError as exc:
-            return web.json_response({"error": {"message": exc.message, "status": exc.status}}, status=exc.status)
+            return web.json_response(
+                {"error": {"message": exc.message, "status": exc.status}}, status=exc.status
+            )
         except SwarmPublishError as exc:
             return web.json_response(
                 {"error": {"message": str(exc), "status": 502}},
@@ -378,6 +452,7 @@ def _batch_worker_init(client_kwargs: dict[str, Any]) -> None:
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    _pin_comfy_input_directory(str(client_kwargs.get("cwd") or WORKSPACE))
     from comfystream.batch_client import BatchComfyStreamClient
 
     client = BatchComfyStreamClient(**client_kwargs)
@@ -390,6 +465,19 @@ def _batch_worker_init(client_kwargs: dict[str, Any]) -> None:
     _batch_worker_execute.workspace = str(client_kwargs.get("cwd") or WORKSPACE)
 
 
+def _pin_comfy_input_directory(workspace: str) -> None:
+    """LoadImage lists the input folder during validation.
+
+    The validating interpreter may not be this worker. comfystream_ffmpeg_paths
+    hooks every later import of Comfy's folder_paths module and returns the
+    workspace directories from that process too.
+    """
+    os.environ["COMFYUI_CWD"] = workspace
+    import comfystream_ffmpeg_paths
+
+    comfystream_ffmpeg_paths.install()
+
+
 def _batch_worker_execute(job: dict[str, Any]) -> dict[str, Any]:
     from comfystream.ffmpeg.execute import FfmpegJobError, run_job
 
@@ -398,7 +486,9 @@ def _batch_worker_execute(job: dict[str, Any]) -> dict[str, Any]:
     if queue is None:
         return {"error": {"message": "Comfy client is not running", "status": 503}}
     try:
-        result = run_job(queue, workspace, str(job["tool"]), dict(job["files"]), dict(job["params"]))
+        result = run_job(
+            queue, workspace, str(job["tool"]), dict(job["files"]), dict(job["params"])
+        )
     except FfmpegJobError as exc:
         return {"error": {"message": str(exc), "status": exc.status}}
     except Exception as exc:
@@ -413,7 +503,9 @@ def _batch_worker_execute(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     args = _parse_args()
     web.run_app(FfmpegRunner(args).build_app(), host=args.host, port=args.port)
 

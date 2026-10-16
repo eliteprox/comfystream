@@ -164,7 +164,7 @@ def merge_videos(filenames: list[str], prefix: str) -> dict[str, Any]:
     concat_id = str(len(filenames) + 1)
     inputs: dict[str, Any] = {"codec": "auto"}
     for index, link in enumerate(links):
-        inputs[f"video{index + 1}"] = link
+        inputs[f"videos.video{index}"] = link
     prompt[concat_id] = {"class_type": "ConcatenateVideo", "inputs": inputs}
     prompt[str(len(filenames) + 2)] = _save_video(concat_id, prefix)
     return prompt
@@ -208,8 +208,53 @@ def images_to_video(filenames: list[tuple[str, int]], prefix: str, fps: float) -
     return prompt
 
 
-def compose(filenames: list[str], prefix: str) -> dict[str, Any]:
-    return merge_videos(filenames, prefix)
+def compose(items: list[tuple[Any, ...]], prefix: str, fps: float) -> dict[str, Any]:
+    """Turn image and video keyframes into one clip.
+
+    Each item is ``("image", filename, frames)`` or ``("video", filename)``.
+    """
+    prompt: dict[str, Any] = {}
+    next_id = 1
+    links: list[list[Any]] = []
+    for item in items:
+        if item[0] == "image":
+            _, name, frames = item
+            load_id = str(next_id)
+            next_id += 1
+            prompt[load_id] = {"class_type": "LoadImage", "inputs": {"image": name}}
+            current = load_id
+            if int(frames) > 1:
+                repeat_id = str(next_id)
+                next_id += 1
+                prompt[repeat_id] = {
+                    "class_type": "RepeatImageBatch",
+                    "inputs": {"image": [load_id, 0], "amount": int(frames)},
+                }
+                current = repeat_id
+            create_id = str(next_id)
+            next_id += 1
+            prompt[create_id] = {
+                "class_type": "CreateVideo",
+                "inputs": {"images": [current, 0], "fps": float(fps)},
+            }
+            links.append([create_id, 0])
+            continue
+        _, name = item
+        load_id = str(next_id)
+        next_id += 1
+        prompt[load_id] = _load_video(name)
+        links.append([load_id, 0])
+    if len(links) == 1:
+        prompt[str(next_id)] = _save_video(links[0][0], prefix)
+        return prompt
+    concat_id = str(next_id)
+    next_id += 1
+    inputs: dict[str, Any] = {"codec": "auto"}
+    for index, link in enumerate(links):
+        inputs[f"videos.video{index}"] = link
+    prompt[concat_id] = {"class_type": "ConcatenateVideo", "inputs": inputs}
+    prompt[str(next_id)] = _save_video(concat_id, prefix)
+    return prompt
 
 
 def clone(prompt: dict[str, Any]) -> dict[str, Any]:
