@@ -55,7 +55,7 @@ pipelines:
     session_idle_timeout_s: 15
     price: 0.35
     currency: usd
-    unit: 720p
+    unit: hour
     presets:
       neon-stage:
         prompt: a neon-lit concert stage, laser beams, glowing haze, vivid magenta and cyan
@@ -92,7 +92,7 @@ pipelines:
     session_idle_timeout_s: 15
     price: 0.35
     currency: usd
-    unit: 720p
+    unit: hour
     presets:
       neon-stage:
         prompt: a neon-lit concert stage, laser beams, glowing haze, vivid magenta and cyan
