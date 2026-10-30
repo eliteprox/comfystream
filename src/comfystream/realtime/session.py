@@ -187,13 +187,18 @@ class StreamSession:
         }
 
 
+# Metered price units, as seconds per unit, for the local cost estimate.
+_SECONDS_PER_UNIT = {"hour": 3600.0, "seconds": 1.0}
+
+
 def usage_record(
     session: StreamSession,
     *,
     reason: str,
     pipeline: dict[str, Any],
-    price_per_hour: float,
+    price: float,
     currency: str,
+    unit: str,
 ) -> dict[str, Any]:
     elapsed = session.elapsed_s()
     paused = session.paused_s()
@@ -215,8 +220,8 @@ def usage_record(
         "fallback_events": session.fallback_events,
         **session.performance(),
         "cost_estimate": {
-            "amount": round(price_per_hour * elapsed / 3600.0, 6),
+            "amount": round(price * elapsed / _SECONDS_PER_UNIT.get(unit, 3600.0), 6),
             "currency": currency,
-            "basis": "advertised price per hour x reserved duration",
+            "basis": f"advertised price per {unit} x reserved duration",
         },
     }

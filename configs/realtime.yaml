@@ -53,6 +53,7 @@ pipelines:
     model: black-forest-labs/FLUX.2-klein-4B
     cold_start_s: 20
     session_idle_timeout_s: 15
+    # USD per hour; the orchestrator advertises it per second.
     price: 0.35
     currency: usd
     unit: hour
@@ -90,6 +91,7 @@ pipelines:
     # ~30 s with cached TensorRT engines; a new GPU arch builds them once (~6 min).
     cold_start_s: 30
     session_idle_timeout_s: 15
+    # USD per hour; the orchestrator advertises it per second.
     price: 0.35
     currency: usd
     unit: hour

@@ -610,8 +610,9 @@ class PipelineWorker:
                 current,
                 reason=reason,
                 pipeline=self.pipeline_info() | {"gpu": self.spec.gpu},
-                price_per_hour=self.spec.price,
+                price=self.spec.price,
                 currency=self.spec.currency,
+                unit=self.spec.unit,
             )
             self.ended[current.session_id] = record
             while len(self.ended) > ENDED_SESSIONS_KEPT:
