@@ -412,7 +412,15 @@ def main():
         secret=os.environ["LIVEPEER_ORCH_SECRET"],
         runner_url=f"http://127.0.0.1:{args.port}",
     )
-    web.run_app(app, host="127.0.0.1", port=args.port, handler_cancellation=True, access_log=None)
+    web.run_app(
+        app,
+        host="127.0.0.1",
+        port=args.port,
+        handler_cancellation=True,
+        access_log=None,
+        max_field_size=262144,
+        max_line_size=262144,
+    )
 
 
 if __name__ == "__main__":
