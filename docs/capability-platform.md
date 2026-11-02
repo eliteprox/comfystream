@@ -35,6 +35,34 @@ The initial CUDA 12.8 media image installed successfully with normal dependency
 resolution on eliteprd1. Rebased locks, both GPU profiles, model acceptance and
 legacy workflow compatibility still need verification before deployment.
 
-The local capability path does not yet register paid Livepeer media operations.
-It must not be advertised as a production replacement until runtime, IPC, protocol
-and model acceptance pass. Existing live-runner entrypoints remain available.
+`comfystream-catalog-runner --config deployment.json` registers five synchronous
+single-shot applications: FLUX, BiRefNet, Whisper, ACE-Step and TripoSR. Qwen and
+Wan are excluded from this deployment. Each application advertises one exact model,
+an immutable image and descriptor deployment identity, and the same one-slot capacity
+group. All requests use the embedded client's core process executor and shared
+capacity file. The gateway continues to dispatch through Builder Engine/orchestrators.
+
+The deployment file contains `image` (an immutable image digest), `capacity_group`
+and `models` (capability ID to `app`, `runner_id`, and positive USD `price`). Prices
+are fixed per request; the current operator-approved price is USD 0.02 per model.
+Startup validates every installed workflow before registering; partial registration
+failure unregisters previous entries. Shutdown unregisters every entry and joins
+the executor. Metadata remains a candidate until independently admitted.
+
+This server binds loopback and requires the orchestrator on the same host; containers
+must use host networking. Do not expose its port through an unauthenticated reverse
+proxy. The orchestrator owns public payment/session authorization. Operator secrets
+are supplied only through `LIVEPEER_ORCH_SECRET`. Other required environment values
+are `LIVEPEER_ORCH_URL`, `COMFYUI_CWD` and `COMFYSTREAM_CAPACITY_FILE`.
+
+Each registration URL ends in `/catalog/{capability}`; the orchestrator appends the
+standard operation path. `/openapi.json` documents these routes. Image output uses
+OpenAI base64 response shapes, transcription accepts multipart `file`, and extension
+routes return typed base64 media. Image inputs accept inline data URLs or multipart
+uploads. Filesystem paths and remote URLs are refused. Request files and workflow
+artifacts are removed after synchronous delivery; gateway receipts/artifact retention
+are independent. Unsupported fields fail before model dispatch.
+
+Do not describe registration as paid-network acceptance. Runtime, IPC, protocol,
+failure and model acceptance remain deployment gates. Existing live-runner entrypoints
+remain available and the production live service is not replaced by this batch server.

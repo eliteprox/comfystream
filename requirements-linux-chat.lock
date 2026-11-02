@@ -126,7 +126,7 @@ comfy-angle==0.1.1
     # via comfyui
 comfy-kitchen==0.2.40
     # via comfyui
-comfyui @ git+https://github.com/eliteprox/forks-pip-and-uv-installable-ComfyUI.git@024eb6c50d50fc3c881336bc06628508ada63c18
+comfyui @ git+https://github.com/eliteprox/forks-pip-and-uv-installable-ComfyUI.git@a178b53bde7782b46a41eb12bfbee1bfc2feb4a2
     # via comfystream (pyproject.toml)
 comfyui-embedded-docs==0.5.15
     # via comfyui
@@ -259,9 +259,7 @@ greenlet==3.5.6
 griffelib==2.4.1
     # via pydantic-ai-slim
 grpcio==1.85.1
-    # via
-    #   livepeer-gateway
-    #   opentelemetry-exporter-otlp-proto-grpc
+    # via opentelemetry-exporter-otlp-proto-grpc
 h11==0.16.0
     # via
     #   httpcore
@@ -368,7 +366,7 @@ lazy-object-proxy==1.13.0
     # via comfyui
 librosa==1.0.0
     # via comfystream (pyproject.toml)
-livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@796ca2dc833ef3c5981260c50d948639640f2895
+livepeer-gateway @ git+https://github.com/livepeer/livepeer-python-gateway.git@2017a80c740af5fcb0fef4ee84659af9b07fb90c
     # via comfystream (pyproject.toml)
 livepeer-swarm-publish @ git+https://github.com/eliteprox/runner-app-examples.git@af13cd58a4d6e6fd6360ec898df0ae252284b6e5#subdirectory=packages/swarm-publish
     # via comfystream (pyproject.toml)
@@ -645,7 +643,6 @@ protobuf==7.36.2
     # via
     #   comfyui
     #   googleapis-common-protos
-    #   livepeer-gateway
     #   opentelemetry-proto
 psutil==7.2.2
     # via
@@ -840,7 +837,7 @@ sqlalchemy==2.0.55
     # via
     #   alembic
     #   comfyui
-stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@7a21d1a1cfce6209e6d26b4737a0eaeb8def3144
+stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@6a305c4d86aa0176e4818b6534c12f1b8f11006e
     # via comfystream (pyproject.toml)
 sympy==1.14.0
     # via torch

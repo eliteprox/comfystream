@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import Future
 
 import pytest
 
@@ -18,20 +19,27 @@ class FakeExecutor:
         assert self.stopped
         self.joined = True
 
+    def submit(self, function, *args):
+        future = Future()
+        future.set_result(None)
+        return future
+
 
 class FakeClient:
     def __init__(self, config, executor):
         self.executor = executor
         self.wait = False
         self.started = asyncio.Event()
+        self.history = {}
 
     async def __aenter__(self):
         return self
 
-    async def clear_cache(self):
-        pass
+    async def clear_cache(self, *, unload_models=True):
+        assert unload_models is False
 
     async def queue_prompt(self, prompt):
+        self.history["prompt"] = prompt
         self.started.set()
         if self.wait:
             await asyncio.Event().wait()
@@ -56,6 +64,7 @@ async def test_explicit_executor_reuses_model_and_evicts_on_switch(tmp_path):
     try:
         assert (await service.execute("whisper", {"audio": "test.wav"}))["text"] == "ok"
         worker = service._executor
+        assert service._client.history == {}
         assert worker.options["max_workers"] == 1
         assert service._client.executor is worker
         await service.execute("whisper", {"audio": "test.wav"})
@@ -80,4 +89,5 @@ async def test_cancel_joins_worker_before_releasing_capacity(tmp_path):
         await task
     assert worker.joined
     assert service._file is None
+    assert list((tmp_path / "output").iterdir()) == []
     await service.close()

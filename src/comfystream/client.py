@@ -179,7 +179,8 @@ class ComfyStreamClient:
     async def cleanup_queues(self):
         # Clear prompt/node caches in the process that owns them, keeping model
         # weights reusable without retaining a previous customer's frame history.
-        await self.comfy_client.clear_cache()
+        await self.comfy_client.clear_cache(unload_models=False)
+        self.comfy_client.history.clear()
         await asyncio.get_running_loop().run_in_executor(self._process_executor, scrub_worker)
         while not self.channels.image_inputs.empty():
             self.channels.image_inputs.get()

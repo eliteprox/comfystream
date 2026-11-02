@@ -7,7 +7,10 @@ core executor, and a shared file lock prevents separate containers overbooking i
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +22,45 @@ def _initialize_worker(gpu: str, input_dir: str, output_dir: str) -> None:
     os.environ["STREAM_PACK_INPUT_DIR"] = input_dir
     os.environ["STREAM_PACK_OUTPUT_DIR"] = output_dir
     os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    # Core node exception logs can include complete node inputs. The service
+    # boundary returns sanitized errors; worker logs must not retain customer data.
+    logging.disable(logging.CRITICAL)
+
+
+def _set_request_output(directory: str):
+    os.environ["STREAM_PACK_OUTPUT_DIR"] = directory
+
+
+def _discard_request_output(directory: Path, root: str):
+    resolved = directory.resolve()
+    if resolved.parent != Path(root).resolve() or not resolved.name.startswith("request_"):
+        raise ValueError("Invalid request output directory")
+    try:
+        shutil.rmtree(resolved)
+    except FileNotFoundError:
+        pass
 
 
 class CapacityUnavailable(RuntimeError):
     pass
+
+
+def _validate_workflows(workspace: str, capabilities: list[str]):
+    from comfy.cli_args_types import Configuration
+    from comfy.execution_context import context_configuration
+
+    with context_configuration(
+        Configuration(
+            cwd=workspace, cpu=True, offline=True, disable_api_nodes=True, preview_method="none"
+        )
+    ):
+        from comfy.nodes.package import import_all_nodes_in_workspace
+
+        nodes = import_all_nodes_in_workspace()
+        catalog = load_catalog()
+        for name in capabilities:
+            catalog[name].validate_workflow(nodes.NODE_CLASS_MAPPINGS)
 
 
 class CapabilityClient:
@@ -73,6 +111,20 @@ class CapabilityClient:
             }
             for c in self.catalog.values()
         ]
+
+    async def validate_capabilities(self, capabilities: list[str]):
+        # Registers core's context-variable serializers before executor submission.
+        import comfy.execution_context
+        from comfy.distributed.process_pool_executor import ProcessPoolExecutor
+
+        executor = ProcessPoolExecutor(max_workers=1)
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                executor, _validate_workflows, self.workspace, capabilities
+            )
+        finally:
+            executor.stop()
+            await asyncio.to_thread(executor.join)
 
     async def _acquire_gpu(self):
         self.capacity_file.parent.mkdir(parents=True, exist_ok=True)
@@ -128,28 +180,45 @@ class CapabilityClient:
             initargs=(self.gpu, self.input_dir, self.output_dir),
         )
         self._client = client_factory(
-            configuration_factory(cwd=self.workspace, preview_method="none"),
+            configuration_factory(
+                cwd=self.workspace,
+                preview_method="none",
+                offline=True,
+                disable_api_nodes=True,
+                disable_manager_model_fallback=True,
+                disable_civitai_model_fallback=True,
+                logging_level="CRITICAL",
+            ),
             executor=self._executor,
         )
-        await self._client.__aenter__()
+        # This caller owns the external executor. queue_prompt establishes its
+        # per-call configuration context; retaining an entered context across
+        # unrelated asyncio request/idle tasks would leak context-variable tokens.
         self._model = capability
 
     async def _stop_worker(self):
         if self._executor is not None:
-            executor, self._executor = self._executor, None
+            executor = self._executor
             executor.stop()
             # A future cancellation is insufficient: wait for the CUDA owner to exit.
             stopped = asyncio.create_task(asyncio.to_thread(executor.join))
-            try:
-                await asyncio.shield(stopped)
-            except asyncio.CancelledError:
-                await stopped
-                raise
+            interrupted = False
+            while not stopped.done():
+                try:
+                    await asyncio.shield(stopped)
+                except asyncio.CancelledError:
+                    interrupted = True
+            stopped.result()
+            self._executor = None
+        else:
+            interrupted = False
         self._client = None
         self._model = None
         if self._file is not None:
             self._file.close()
             self._file = None
+        if interrupted:
+            raise asyncio.CancelledError
 
     async def execute(
         self, capability: str, inputs: dict[str, Any], *, timeout: float = 300
@@ -165,18 +234,37 @@ class CapabilityClient:
                     if self._idle_task:
                         self._idle_task.cancel()
                         self._idle_task = None
-                    await self._load(capability)
+                    request_output = None
                     try:
+                        await self._load(capability)
+                        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+                        request_output = Path(
+                            tempfile.mkdtemp(prefix="request_", dir=self.output_dir)
+                        )
+                        await asyncio.get_running_loop().run_in_executor(
+                            self._executor, _set_request_output, str(request_output)
+                        )
                         outputs = await self._client.queue_prompt(prompt)
                         result = outputs[spec.document["output_binding"]["node"]]["service_result"][
                             0
                         ]
                         spec.validate_output(result)
-                        await self._client.clear_cache()
+                        await self._client.clear_cache(unload_models=False)
+                        self._client.history.clear()
+                        if not result.get("artifacts"):
+                            await asyncio.to_thread(
+                                _discard_request_output, request_output, self.output_dir
+                            )
                         self._idle_task = asyncio.create_task(self._idle_unload())
                         return result
                     except BaseException:
-                        await self._stop_worker()
+                        try:
+                            await self._stop_worker()
+                        finally:
+                            if request_output is not None and self._executor is None:
+                                await asyncio.to_thread(
+                                    _discard_request_output, request_output, self.output_dir
+                                )
                         raise
         finally:
             self._waiting -= 1

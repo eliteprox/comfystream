@@ -20,6 +20,7 @@ from PIL import Image
 
 from comfystream.tools.catalog import get_tool
 from comfystream.tools.frame_slot import (
+    clear,
     get_output_frame,
     set_container_job,
     set_input_frame,
@@ -69,6 +70,8 @@ def run_job(job: dict[str, Any]) -> dict[str, Any]:
                 "stage": "submit",
             }
         }
+    finally:
+        clear()
     encoded = base64.b64encode(data).decode("ascii")
     key = "audio_base64" if mime.startswith("audio/") else "video_base64"
     return {"content_type": mime, key: encoded}

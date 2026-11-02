@@ -5,6 +5,7 @@ from importlib import import_module
 _EXPORTS = {
     "ComfyStreamClient": "client",
     "CapabilityClient": "capability_client",
+    "RemoteCapabilityClient": "remote_client",
     "Pipeline": "pipeline",
     "PipelineState": "pipeline_state",
     "PipelineStateManager": "pipeline_state",
