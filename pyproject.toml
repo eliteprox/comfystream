@@ -10,7 +10,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "asyncio",
     "setuptools>=70,<81",
-    "stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee",
+    "stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@7a21d1a1cfce6209e6d26b4737a0eaeb8def3144",
     "comfyui @ git+https://github.com/eliteprox/forks-pip-and-uv-installable-ComfyUI.git@024eb6c50d50fc3c881336bc06628508ada63c18",
     "aiortc",
     "aiohttp",
@@ -23,13 +23,15 @@ dependencies = [
 
 [project.optional-dependencies]
 capabilities = ["jsonschema>=4.23,<5"]
-media = ["stream-pack[media,language] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee"]
-chat = ["stream-pack[chat] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee"]
+media = ["stream-pack[media,language] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@7a21d1a1cfce6209e6d26b4737a0eaeb8def3144"]
+chat = ["stream-pack[chat] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@7a21d1a1cfce6209e6d26b4737a0eaeb8def3144"]
+ffmpeg = ["livepeer-swarm-publish @ git+https://github.com/eliteprox/runner-app-examples.git@af13cd58a4d6e6fd6360ec898df0ae252284b6e5#subdirectory=packages/swarm-publish"]
 dev = ["pytest", "pytest-cov", "ruff"]
 server = [
     "pytrickle @ git+https://github.com/livepeer/pytrickle.git@v0.1.8"
 ]
 live-runner = [
+    "nvidia-ml-py>=12",
     "livepeer-gateway @ git+https://github.com/eliteprox/livepeer-python-gateway.git@796ca2dc833ef3c5981260c50d948639640f2895",
     "av",
     "pyyaml",
@@ -40,6 +42,7 @@ Repository = "https://github.com/yondonfu/comfystream"
 
 [project.scripts]
 comfystream-live-runner = "comfystream.server.live_runner:main"
+comfystream-ffmpeg-runner = "comfystream.server.ffmpeg_runner:main"
 
 [tool.setuptools.package-data]
 comfystream = ["assets/**/*.json", "assets/**/*.yaml", "assets/**/*.yml"]
@@ -51,6 +54,7 @@ Icon = "https://raw.githubusercontent.com/livepeer/comfystream-docs/main/logo/ic
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+py-modules = ["comfystream_ffmpeg_paths"]
 packages = {find = {where = ["src", "nodes"]}}
 
 [tool.ruff]

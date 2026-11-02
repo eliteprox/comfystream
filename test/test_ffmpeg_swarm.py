@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -24,15 +23,7 @@ from comfystream.ffmpeg.swarm import (
     SwarmProtocolError,
     file_descriptor,
 )
-
-REPO = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location(
-    "ffmpeg_runner",
-    REPO / "server" / "ffmpeg_runner.py",
-)
-ffmpeg_runner = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(ffmpeg_runner)
+from comfystream.server import ffmpeg_runner
 
 PAYLOAD = b"swarm-payload-marker-" + (b"a" * 5000)
 

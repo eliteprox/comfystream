@@ -42,6 +42,16 @@ from urllib.parse import urlsplit
 import av
 import numpy as np
 from aiohttp import web
+from livepeer_gateway.channel_writer import JSONLWriter
+from livepeer_gateway.live_runner import register_runner
+from livepeer_gateway.media_decode import AudioDecodedMediaFrame, VideoDecodedMediaFrame
+from livepeer_gateway.media_output import MediaOutput
+from livepeer_gateway.media_publish import (
+    AudioOutputConfig,
+    MediaPublish,
+    MediaPublishConfig,
+    VideoOutputConfig,
+)
 from PIL import Image
 
 from comfystream.batch_pipeline import BatchPipeline
@@ -54,16 +64,6 @@ from comfystream.realtime.gpu import pinned_gpu
 from comfystream.realtime.spec import load_realtime_config
 from comfystream.realtime.supervisor import RealtimeSupervisor
 from comfystream.utils import convert_prompt
-from livepeer_gateway.channel_writer import JSONLWriter
-from livepeer_gateway.live_runner import register_runner
-from livepeer_gateway.media_decode import AudioDecodedMediaFrame, VideoDecodedMediaFrame
-from livepeer_gateway.media_output import MediaOutput
-from livepeer_gateway.media_publish import (
-    AudioOutputConfig,
-    MediaPublish,
-    MediaPublishConfig,
-    VideoOutputConfig,
-)
 
 log = logging.getLogger("comfystream-live-runner")
 

@@ -53,9 +53,10 @@ pipelines:
     model: black-forest-labs/FLUX.2-klein-4B
     cold_start_s: 20
     session_idle_timeout_s: 15
+    # USD per hour; the orchestrator advertises it per second.
     price: 0.35
     currency: usd
-    unit: 720p
+    unit: hour
     presets:
       neon-stage:
         prompt: a neon-lit concert stage, laser beams, glowing haze, vivid magenta and cyan
@@ -90,9 +91,10 @@ pipelines:
     # ~30 s with cached TensorRT engines; a new GPU arch builds them once (~6 min).
     cold_start_s: 30
     session_idle_timeout_s: 15
+    # USD per hour; the orchestrator advertises it per second.
     price: 0.35
     currency: usd
-    unit: 720p
+    unit: hour
     presets:
       neon-stage:
         prompt: a neon-lit concert stage, laser beams, glowing haze, vivid magenta and cyan

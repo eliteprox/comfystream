@@ -1,5 +1,6 @@
 asyncio
-comfyui @ git+https://github.com/hiddenswitch/pip-and-uv-installable-ComfyUI.git@v0.37.0.7
+comfyui @ git+https://github.com/eliteprox/forks-pip-and-uv-installable-ComfyUI.git@024eb6c50d50fc3c881336bc06628508ada63c18
+stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@7a21d1a1cfce6209e6d26b4737a0eaeb8def3144
 aiortc
 aiohttp
 aiohttp_cors

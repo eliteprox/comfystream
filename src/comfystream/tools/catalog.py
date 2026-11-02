@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW_DIR = REPO_ROOT / "workflows" / "comfystream" / "tools"
+if not WORKFLOW_DIR.is_dir():
+    WORKFLOW_DIR = Path(str(files("comfystream.assets").joinpath("workflows/comfystream/tools")))
 MAX_REQUEST_BYTES = 96 * 1024 * 1024
 
 
