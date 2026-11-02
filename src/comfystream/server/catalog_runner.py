@@ -112,7 +112,6 @@ def create_app(client, config, *, orchestrator, secret, runner_url, register_fn=
                     currency="usd",
                     unit="fixed",
                     metadata=metadata,
-                    label=name,
                     version="inference.runner.v2",
                 )
                 registrations.append(registration)

@@ -56,6 +56,10 @@ async def test_exact_model_registrations_dispatch_sdk_shapes_and_cleanup(tmp_pat
     registrations, closed = [], []
 
     async def register(orchestrator, **kwargs):
+        import inspect
+        from livepeer_gateway.live_runner import register_runner
+
+        inspect.signature(register_runner).bind(orchestrator, **kwargs)
         assert client.validated == list(DEFAULT_CAPABILITIES)
         registrations.append(kwargs)
 
