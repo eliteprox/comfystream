@@ -10,7 +10,7 @@ license = { file = "LICENSE" }
 dependencies = [
     "asyncio",
     "setuptools>=70,<81",
-    "stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@9d50d59e1457ac9eecd33f2f27043f017a176038",
+    "stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee",
     "comfyui @ git+https://github.com/eliteprox/forks-pip-and-uv-installable-ComfyUI.git@024eb6c50d50fc3c881336bc06628508ada63c18",
     "aiortc",
     "aiohttp",
@@ -23,8 +23,8 @@ dependencies = [
 
 [project.optional-dependencies]
 capabilities = ["jsonschema>=4.23,<5"]
-media = ["stream-pack[media,language] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@9d50d59e1457ac9eecd33f2f27043f017a176038"]
-chat = ["stream-pack[chat] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@9d50d59e1457ac9eecd33f2f27043f017a176038"]
+media = ["stream-pack[media,language] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee"]
+chat = ["stream-pack[chat] @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee"]
 dev = ["pytest", "pytest-cov", "ruff"]
 server = [
     "pytrickle @ git+https://github.com/livepeer/pytrickle.git@v0.1.8"

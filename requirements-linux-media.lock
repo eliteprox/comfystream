@@ -862,7 +862,7 @@ starlette==1.10.0
     # via
     #   fastapi
     #   gradio
-stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@9d50d59e1457ac9eecd33f2f27043f017a176038
+stream-pack @ git+https://github.com/livepeer/ComfyUI-Stream-Pack.git@0400e9b4464cd85f044baff9d3456b656e1cecee
     # via comfystream (pyproject.toml)
 sympy==1.14.0
     # via torch
