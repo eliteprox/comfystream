@@ -6,9 +6,9 @@ import hashlib
 import json
 import os
 import re
-from importlib.resources import files
 from dataclasses import dataclass
 from decimal import Decimal
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 

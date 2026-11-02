@@ -172,6 +172,7 @@ class CapabilityClient:
                             0
                         ]
                         spec.validate_output(result)
+                        await self._client.clear_cache()
                         self._idle_task = asyncio.create_task(self._idle_unload())
                         return result
                     except BaseException:

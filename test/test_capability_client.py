@@ -28,6 +28,9 @@ class FakeClient:
     async def __aenter__(self):
         return self
 
+    async def clear_cache(self):
+        pass
+
     async def queue_prompt(self, prompt):
         self.started.set()
         if self.wait:

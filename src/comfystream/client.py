@@ -9,6 +9,7 @@ from comfy.cli_args_types import Configuration
 from comfy.client.embedded_comfy_client import EmbeddedComfyClient
 from comfy.distributed.process_pool_executor import ProcessPoolExecutor
 from stream_pack.channels import SessionChannels, bind_worker_channels
+from stream_pack.reset import scrub_worker
 
 from comfystream.exceptions import ComfyStreamInputTimeoutError
 from comfystream.utils import convert_prompt, get_default_workflow
@@ -112,7 +113,7 @@ class ComfyStreamClient:
                         await self._park_until_input()
                         continue
                     except Exception as e:
-                        logger.error(f"Error running prompt: {str(e)}")
+                        logger.error("Workflow execution failed")
                         logger.info("Stopping prompt execution and returning to passthrough mode")
 
                         # Stop running and switch to default passthrough workflow
@@ -176,6 +177,10 @@ class ComfyStreamClient:
             logger.debug("Prompts stopped (tasks cancelled)")
 
     async def cleanup_queues(self):
+        # Clear prompt/node caches in the process that owns them, keeping model
+        # weights reusable without retaining a previous customer's frame history.
+        await self.comfy_client.clear_cache()
+        await asyncio.get_running_loop().run_in_executor(self._process_executor, scrub_worker)
         while not self.channels.image_inputs.empty():
             self.channels.image_inputs.get()
 
@@ -203,6 +208,9 @@ class ComfyStreamClient:
     async def _fallback_to_passthrough(self):
         """Switch to default passthrough workflow when an error occurs."""
         try:
+            if self.current_prompts == [convert_prompt(get_default_workflow())]:
+                self._run_enabled_event.clear()
+                return
             # Pause the runner
             self._run_enabled_event.clear()
 
