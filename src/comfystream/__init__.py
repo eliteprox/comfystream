@@ -1,26 +1,29 @@
-try:
+"""ComfyStream public API; discovery does not initialize model libraries."""
+
+from importlib import import_module
+
+_EXPORTS = {
+    "ComfyStreamClient": "client",
+    "CapabilityClient": "capability_client",
+    "Pipeline": "pipeline",
+    "PipelineState": "pipeline_state",
+    "PipelineStateManager": "pipeline_state",
+    "temporary_log_level": "server.utils",
+    "FPSMeter": "server.utils",
+    "MetricsManager": "server.metrics",
+    "StreamStatsManager": "server.metrics",
+    "ComfyStreamInputTimeoutError": "exceptions",
+    "ComfyStreamAudioBufferError": "exceptions",
+}
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
     from comfy_compatibility.imports import MAIN_PY, SITE_PACKAGES, ImportContext
-except ImportError:
-    ImportContext = None
 
-if ImportContext is not None:
     with ImportContext("comfy", "comfy_extras", "comfy.vendor", order=[SITE_PACKAGES, MAIN_PY]):
-        from .client import ComfyStreamClient
-        from .exceptions import ComfyStreamAudioBufferError, ComfyStreamInputTimeoutError
-        from .pipeline import Pipeline
-        from .pipeline_state import PipelineState, PipelineStateManager
-        from .server.metrics import MetricsManager, StreamStatsManager
-        from .server.utils import FPSMeter, temporary_log_level
-
-__all__ = [
-    "ComfyStreamClient",
-    "Pipeline",
-    "PipelineState",
-    "PipelineStateManager",
-    "temporary_log_level",
-    "FPSMeter",
-    "MetricsManager",
-    "StreamStatsManager",
-    "ComfyStreamInputTimeoutError",
-    "ComfyStreamAudioBufferError",
-]
+        value = getattr(import_module("." + _EXPORTS[name], __name__), name)
+    globals()[name] = value
+    return value

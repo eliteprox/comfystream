@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 from fractions import Fraction
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping, cast
 
@@ -26,7 +27,10 @@ FIRST_FRAME_TIMEOUT_S = 1800.0
 
 def _resolve(path: str) -> Path:
     candidate = Path(path)
-    return candidate if candidate.is_absolute() else _REPO_ROOT / candidate
+    if candidate.is_absolute():
+        return candidate
+    checkout = _REPO_ROOT / candidate
+    return checkout if checkout.exists() else Path(str(files("comfystream.assets").joinpath(path)))
 
 
 def engine_dir_for_device(engine_root: str) -> str:
