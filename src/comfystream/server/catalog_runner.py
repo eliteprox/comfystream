@@ -363,11 +363,20 @@ def create_app(client, config, *, orchestrator, secret, runner_url, register_fn=
                     }
                 },
             }
+            request_content = {mime: {"schema": schema}}
+            if name == "whisper":
+                inline_schema = copy.deepcopy(schema)
+                inline_schema["properties"]["file"] = {
+                    "type": "string",
+                    "pattern": r"^data:[^,]+;base64,",
+                    "description": "Inline base64 audio data URL. Remote URLs and filesystem paths are rejected.",
+                }
+                request_content["application/json"] = {"schema": inline_schema}
             paths["/catalog/" + name + path] = {
                 "post": {
                     "operationId": name,
                     "description": spec.document["description"],
-                    "requestBody": {"required": True, "content": {mime: {"schema": schema}}},
+                    "requestBody": {"required": True, "content": request_content},
                     "responses": {
                         "200": {
                             "description": "Completed model response",

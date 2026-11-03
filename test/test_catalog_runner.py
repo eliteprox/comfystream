@@ -57,6 +57,7 @@ async def test_exact_model_registrations_dispatch_sdk_shapes_and_cleanup(tmp_pat
 
     async def register(orchestrator, **kwargs):
         import inspect
+
         from livepeer_gateway.live_runner import register_runner
 
         inspect.signature(register_runner).bind(orchestrator, **kwargs)
@@ -89,6 +90,10 @@ async def test_exact_model_registrations_dispatch_sdk_shapes_and_cleanup(tmp_pat
                 schema = await response.json()
                 assert schema["openapi"] == "3.1.0" and len(schema["paths"]) == 5
                 assert all("requestBody" in path["post"] for path in schema["paths"].values())
+                transcription = schema["paths"]["/catalog/whisper/v1/audio/transcriptions"]["post"][
+                    "requestBody"
+                ]["content"]
+                assert set(transcription) == {"application/json", "multipart/form-data"}
             model = client.catalog["flux-image"].document["model"]["source"]
             async with http.post(
                 server.make_url("/catalog/flux-image/v1/images/generations"),
