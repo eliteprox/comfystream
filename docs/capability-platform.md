@@ -73,3 +73,12 @@ are independent. Unsupported fields fail before model dispatch.
 Do not describe registration as paid-network acceptance. Runtime, IPC, protocol,
 failure and model acceptance remain deployment gates. Existing live-runner entrypoints
 remain available and the production live service is not replaced by this batch server.
+
+Successful batch requests retain their model worker and weights indefinitely while
+clearing request caches and history. There is no idle expiry. Switching capabilities
+replaces the worker in the single residency slot. Competing containers using the
+same capacity file publish locked waiter files on its shared volume; an idle owner
+joins its worker before releasing the slot. Active requests are never evicted by
+capacity demand. Cancellation, failure and shutdown also join the worker. All
+containers sharing a capacity file must support this demand protocol; older clients
+that only wait on the capacity lock cannot request eviction from a warm owner.

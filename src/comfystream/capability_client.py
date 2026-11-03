@@ -42,6 +42,19 @@ def _discard_request_output(directory: Path, root: str):
         pass
 
 
+def _try_lock(handle):
+    """Nonblocking lock, also used to distinguish live demand from crash debris."""
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 class CapacityUnavailable(RuntimeError):
     pass
 
@@ -95,10 +108,28 @@ class CapabilityClient:
         self._configuration_factory = configuration_factory
         self._idle_task = None
 
+    def _capacity_requested(self):
+        for path in self.capacity_file.parent.glob(self.capacity_file.name + ".waiter_*"):
+            try:
+                with path.open("r+b") as handle:
+                    try:
+                        _try_lock(handle)
+                    except OSError:
+                        return True
+            except FileNotFoundError:
+                continue
+        return False
+
     async def _idle_unload(self):
-        await asyncio.sleep(5)
-        async with self._lock:
-            await self._stop_worker()
+        # Retain weights indefinitely while idle. A competing container signals
+        # demand with a locked file on the shared capacity volume. Unlocked files
+        # left by crashed waiters do not cause eviction. Never evict active work.
+        while True:
+            await asyncio.sleep(0.1)
+            async with self._lock:
+                if self._capacity_requested():
+                    await self._stop_worker()
+                    return
 
     def capabilities(self) -> list[dict[str, Any]]:
         return [
@@ -133,25 +164,34 @@ class CapabilityClient:
         if not handle.read(1):
             handle.write(b"0")
             handle.flush()
-        while True:
-            try:
-                if os.name == "nt":
-                    import msvcrt
-
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                self._file = handle
-                return
-            except OSError:
+        demand = None
+        demand_path = None
+        admitted = False
+        try:
+            while True:
                 try:
+                    _try_lock(handle)
+                    self._file = handle
+                    admitted = True
+                    return
+                except OSError:
+                    if demand is None:
+                        descriptor, name = tempfile.mkstemp(
+                            prefix=self.capacity_file.name + ".waiter_",
+                            dir=self.capacity_file.parent,
+                        )
+                        demand_path = Path(name)
+                        demand = os.fdopen(descriptor, "r+b")
+                        demand.write(b"0")
+                        demand.flush()
+                        _try_lock(demand)
                     await asyncio.sleep(0.05)
-                except BaseException:
-                    handle.close()
-                    raise
+        finally:
+            if demand is not None:
+                demand.close()
+                demand_path.unlink(missing_ok=True)
+            if not admitted:
+                handle.close()
 
     async def _load(self, capability: str):
         if self._model == capability:
