@@ -270,7 +270,7 @@ class FfmpegRunner:
                 self.args.orchestrator,
                 secret=self.args.orchSecret,
                 runner_url=f"{runner}/batch/{tool}",
-                app=f"comfystream/ffmpeg-{tool}",
+                app=f"media/ffmpeg-{tool}",
                 mode="single-shot",
                 capacity=1,
                 price=PRICE,
@@ -283,13 +283,13 @@ class FfmpegRunner:
                 auto_detect_gpu=gpu is not None,
             )
             self._registrations.append(registration)
-            log.info("registered batch app=%s", f"comfystream/ffmpeg-{tool}")
+            log.info("registered batch app=%s", f"media/ffmpeg-{tool}")
         if self.bee_url:
             registration = await register_runner(
                 self.args.orchestrator,
                 secret=self.args.orchSecret,
                 runner_url=f"{runner}/publish",
-                app="comfystream/ffmpeg-publish",
+                app="media/ffmpeg-publish",
                 mode="single-shot",
                 capacity=1,
                 price=PRICE,
@@ -302,7 +302,7 @@ class FfmpegRunner:
                 auto_detect_gpu=gpu is not None,
             )
             self._registrations.append(registration)
-            log.info("registered batch app=comfystream/ffmpeg-publish")
+            log.info("registered batch app=media/ffmpeg-publish")
 
     async def close(self, _app: web.Application) -> None:
         for registration in self._registrations:

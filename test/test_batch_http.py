@@ -183,7 +183,7 @@ def test_batch_pipeline_registers_single_shot_execute_url():
     asyncio.run(_run())
     assert len(captured) == 1
     kwargs = captured[0]
-    assert kwargs["app"] == "comfystream/fal-flux-schnell"
+    assert kwargs["app"] == "fal-flux-schnell"
     assert kwargs["mode"] == "single-shot"
     assert kwargs["unit"] == "fixed"
     assert kwargs["capacity"] == 4

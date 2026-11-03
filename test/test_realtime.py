@@ -168,7 +168,7 @@ class FakeRegistration:
 def test_repo_config_parses():
     specs, capacity = load_realtime_config(REPO / "configs" / "realtime.yaml")
     by_name = {spec.name: spec for spec in specs}
-    assert by_name["flux-klein"].app == "comfystream/flux-klein"
+    assert by_name["flux-klein"].app == "live/flux-klein"
     assert by_name["flux-klein"].port == 8720
     assert by_name["sd-turbo"].gpu == by_name["flux-klein"].gpu
     assert capacity.max_loaded == 1 and capacity.gpus[by_name["sd-turbo"].gpu] == 1

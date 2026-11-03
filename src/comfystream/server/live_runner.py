@@ -67,7 +67,7 @@ from comfystream.utils import convert_prompt
 
 log = logging.getLogger("comfystream-live-runner")
 
-APP_ID = "comfystream"
+APP_ID = os.environ.get("LIVEPEER_APP_ID", "live/video-to-video")
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8991
 CHANNEL_MIME_VIDEO = "video/mp2t"

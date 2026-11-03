@@ -253,7 +253,7 @@ def _load_capability(
 
     return FalCapability(
         capability=capability,
-        app_id=app_id,
+        app_id=app_id.removeprefix("comfystream/"),
         endpoint_id=endpoint_id,
         queue_app_id=queue_app_id,
         schema_bytes=schema_bytes,

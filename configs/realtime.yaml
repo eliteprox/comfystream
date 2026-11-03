@@ -42,7 +42,7 @@ capacity:
 
 pipelines:
   flux-klein:
-    app: comfystream/flux-klein
+    app: live/flux-klein
     backend: comfy_workflow
     port: 8720
     gpu: GPU-745244ef-3615-57bd-458f-299fe2289f5a  # RTX 3090 Ti, ~16.5 GB
@@ -78,7 +78,7 @@ pipelines:
       height: 384
 
   sd-turbo:
-    app: comfystream/sd-turbo
+    app: live/sd-turbo
     backend: comfy_workflow
     port: 8721
     gpu: GPU-745244ef-3615-57bd-458f-299fe2289f5a  # RTX 3090 Ti, ~4.5 GB (swaps with flux-klein)

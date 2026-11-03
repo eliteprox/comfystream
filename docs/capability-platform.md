@@ -1,5 +1,12 @@
 # Local capabilities
 
+Public registration names describe the service: `flux-klein`, `birefnet`, `whisper`,
+`ace-step` and `triposr` for the native batch catalog; `live/*` for streaming models;
+`media/ffmpeg-*` for native FFmpeg tools; and `fal-*` for enabled provider adapters.
+FAL's reviewed upstream contract identities and hashes remain intact while the
+registration removes the implementation prefix. `LIVEPEER_APP_ID` can override the
+base live service's `live/video-to-video` name. Runtime package names remain internal.
+
 The capability branch is based on `feat/ffmpeg-stream-batch`, initially
 `02ca83c`, preserving its FFmpeg tools, Swarm publishing and realtime pricing.
 Both runners have installed console entrypoints; use the `ffmpeg` extra for

@@ -7,7 +7,7 @@ capacity:
 
 pipelines:
   ffmpeg-live:
-    app: comfystream/ffmpeg-live
+    app: media/ffmpeg-live
     backend: ffmpeg_filter
     port: 8740
     gpu: ""
