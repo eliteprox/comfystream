@@ -74,7 +74,8 @@ def main():
         "role": args.role,
         "python_venv": venv,
         "tag": args.tag,
-        "registry_published_image": bool(built.get("RepoDigests")),
+        "repository_digests": built.get("RepoDigests", []),
+        "registry_push_performed": False,
     }
     args.record.write_text(json.dumps(record, indent=2) + "\n")
     print(json.dumps(record))
