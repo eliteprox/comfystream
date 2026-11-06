@@ -63,6 +63,8 @@ from comfystream.pipeline import Pipeline
 from comfystream.realtime.gpu import pinned_gpu
 from comfystream.realtime.spec import load_realtime_config
 from comfystream.realtime.supervisor import RealtimeSupervisor
+from comfystream.runner_contract import enabled as contract_enabled
+from comfystream.runner_contract import workflow_envelope
 from comfystream.utils import convert_prompt
 
 log = logging.getLogger("comfystream-live-runner")
@@ -182,7 +184,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-batch",
         action="store_true",
-        help="Do not register or serve fal single-shot capabilities.",
+        default=True,
+        help="Do not register or serve legacy FAL capabilities (default).",
+    )
+    parser.add_argument(
+        "--enable-fal",
+        dest="skip_batch",
+        action="store_false",
+        help="Explicitly enable the legacy FAL adapter; excluded from the v1 rollout.",
     )
     parser.add_argument(
         "--batch-workers",
@@ -262,11 +271,46 @@ def _require_stream_io(io: WorkflowModality) -> None:
         raise web.HTTPBadRequest(text="start_stream requires a workflow with media I/O")
 
 
+async def _reset_workflow_pipeline(app: web.Application) -> None:
+    await app["pipeline"].stop_prompts(cleanup=True)
+    factory = app.get("pipeline_factory")
+    if factory is not None and not app.get("shutting_down", False):
+        replacement = factory()
+        await replacement.initialize()
+        app["pipeline"] = replacement
+    if app.get("workflow_reserved", False):
+        await app["realtime"].release_external("__workflow_surface__")
+        app["workflow_reserved"] = False
+
+
+@web.middleware
+async def _workflow_admission(request: web.Request, handler):
+    app = request.app
+    supervisor = app.get("realtime")
+    gpu = app.get("workflow_gpu", "")
+    if request.path not in {"/analyze", "/start_stream", "/ws_stream"} or supervisor is None or not gpu or app.get("session") is not None:
+        return await handler(request)
+    if app.get("workflow_starting", False):
+        raise web.HTTPConflict(text="workflow surface is starting another session")
+    app["workflow_starting"] = True
+    try:
+        reason = await supervisor.acquire_external("__workflow_surface__", gpu)
+        if reason is not None:
+            raise web.HTTPServiceUnavailable(text=reason)
+        app["workflow_reserved"] = True
+        try:
+            return await handler(request)
+        finally:
+            if app.get("workflow_reserved", False) and app.get("session") is None:
+                await _reset_workflow_pipeline(app)
+    finally:
+        app["workflow_starting"] = False
+
+
 async def _close_session(app: web.Application, *, stop_prompts: bool = True) -> None:
     session: RunnerSession | None = app.get("session")
     if session is None:
         return
-    app["session"] = None
 
     if session.text_task is not None and not session.text_task.done():
         session.text_task.cancel()
@@ -285,8 +329,9 @@ async def _close_session(app: web.Application, *, stop_prompts: bool = True) -> 
 
     pipeline: Pipeline | None = app.get("pipeline")
     if stop_prompts and pipeline is not None:
-        with suppress(Exception):
-            await pipeline.stop_prompts(cleanup=True)
+        await _reset_workflow_pipeline(app)
+    # Keep the old session occupied until its worker has actually released resources.
+    app["session"] = None
 
 
 async def _on_session_release(app: web.Application, event: Any) -> None:
@@ -801,9 +846,9 @@ def main() -> None:
     args = _parse_args()
     if not args.workspace:
         raise SystemExit("--workspace / COMFYUI_CWD is required")
-    args.fal_key, fal_key_source = resolve_and_apply_fal_key(
-        explicit=args.fal_key,
-        workspace=args.workspace,
+    args.fal_key, fal_key_source = (
+        resolve_and_apply_fal_key(explicit=args.fal_key, workspace=args.workspace)
+        if not args.skip_batch else ("", "disabled")
     )
 
     batch_catalog = {}
@@ -827,10 +872,15 @@ def main() -> None:
     realtime_specs, realtime_capacity = (
         load_realtime_config(args.realtime_config) if args.realtime_config else ([], None)
     )
+    workflow_gpu = os.environ.get("COMFYSTREAM_WORKFLOW_GPU", "")
+    if contract_enabled() and realtime_specs and os.environ.get("COMFYSTREAM_GPU_CAPACITY_GROUP"):
+        managed_gpus = {spec.gpu for spec in realtime_specs if spec.gpu}
+        if len(managed_gpus) != 1 or workflow_gpu not in managed_gpus:
+            raise ValueError("A v1 live capacity group requires one GPU and explicit COMFYSTREAM_WORKFLOW_GPU")
     runner_parts = urlsplit(args.runner_url)
 
-    async def _on_startup(app: web.Application) -> None:
-        pipeline = Pipeline(
+    def _new_pipeline() -> Pipeline:
+        return Pipeline(
             width=args.width,
             height=args.height,
             cwd=args.workspace,
@@ -840,6 +890,13 @@ def main() -> None:
             blacklist_custom_nodes=["ComfyUI-Manager", "ComfyUI-StreamDiffusion"],
             bootstrap_default_prompt=not args.skip_bootstrap,
         )
+
+    async def _on_startup(app: web.Application) -> None:
+        pipeline = _new_pipeline()
+        app["pipeline_factory"] = _new_pipeline
+        app["workflow_gpu"] = workflow_gpu
+        app["workflow_reserved"] = False
+        app["workflow_starting"] = False
         await pipeline.initialize()
         app["pipeline"] = pipeline
         app["session"] = None
@@ -857,7 +914,7 @@ def main() -> None:
             price=args.price,
             currency="usd",
             unit="hour",
-            metadata='{"modalities":"workflow-driven","surfaces":["analyze","start_stream","update_stream","ws_stream"]}',
+            metadata=workflow_envelope() if contract_enabled() else '{"modalities":"workflow-driven","surfaces":["analyze","start_stream","update_stream","ws_stream"]}',
             gpu=pinned_gpu(),
             on_session_release=_release,
         )
@@ -907,7 +964,11 @@ def main() -> None:
             )
 
     async def _on_cleanup(app: web.Application) -> None:
-        await _close_session(app)
+        app["shutting_down"] = True
+        with suppress(Exception):
+            await _close_session(app)
+        with suppress(Exception):
+            await app["pipeline"].cleanup()
         realtime = app.get("realtime")
         if realtime is not None:
             with suppress(Exception):
@@ -920,6 +981,7 @@ def main() -> None:
             await app["registration"].close()  # Livepeer: 3
 
     app = web.Application(
+        middlewares=[_workflow_admission],
         client_max_size=client_max_size,
         handler_args={
             "max_line_size": HEADER_LIMIT_BYTES,

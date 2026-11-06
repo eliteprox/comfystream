@@ -66,6 +66,7 @@ class FfmpegWorkflowBackend:
             cwd=self.workspace,
             disable_cuda_malloc=True,
             gpu_only=False,
+            cpu=True,
             preview_method="none",
             blacklist_custom_nodes=["ComfyUI-Manager"],
             bootstrap_default_prompt=False,

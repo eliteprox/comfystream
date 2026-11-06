@@ -97,7 +97,7 @@ def declarations(client, config):
         digest = config["image"].rsplit("@", 1)[1]
         metadata = {
             "runner_contract": 1,
-            "deployment_revision": deployment_revision(digest, profile, model),
+            "deployment_revision": deployment_revision(config["image"], profile, model),
             "model": model,
             "endpoints": {endpoint: {"profile": profile}},
             "runtime": {"image": digest},

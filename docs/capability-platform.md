@@ -1,11 +1,10 @@
 # Local capabilities
 
-Public registration names describe the service: `flux-klein`, `birefnet`, `whisper`,
-`ace-step` and `triposr` for the native batch catalog; `live/*` for streaming models;
-`media/ffmpeg-*` for native FFmpeg tools; and `fal-*` for enabled provider adapters.
-FAL's reviewed upstream contract identities and hashes remain intact while the
-registration removes the implementation prefix. `LIVEPEER_APP_ID` can override the
-base live service's `live/video-to-video` name. Runtime package names remain internal.
+The batch catalog uses capability App IDs: `text-to-image`, `image-edit`,
+`transcription`, `music` and `image-to-3d`. Exact models and immutable model
+revisions belong in the v1 envelope. Deployment files preserve stable runner IDs,
+prices and capacity groups. Existing live/media compatibility App IDs are retained
+until their clients are migrated explicitly.
 
 The capability branch is based on `feat/ffmpeg-stream-batch`, initially
 `02ca83c`, preserving its FFmpeg tools, Swarm publishing and realtime pricing.
@@ -15,8 +14,8 @@ Both runners have installed console entrypoints; use the `ffmpeg` extra for
 `CapabilityClient` executes bundled Stream Pack descriptors with the embedded core's
 spawn-based process executor. It does not use the CUDA-disabled hosted-provider pool.
 Use one client per scheduled GPU slot and share `capacity_file` across containers
-using that physical GPU. A worker is evicted when the model changes or after five
-idle seconds so another container can acquire the slot. Cancellation waits for the
+using that physical GPU. A worker is evicted when the model changes or another container requests its
+shared capacity. Successful workers otherwise retain their model weights. Cancellation waits for the
 worker to exit before releasing GPU admission.
 
 Provide explicit workspace, staged input directory and output directory paths.
@@ -82,3 +81,64 @@ joins its worker before releasing the slot. Active requests are never evicted by
 capacity demand. Cancellation, failure and shutdown also join the worker. All
 containers sharing a capacity file must support this demand protocol; older clients
 that only wait on the capacity lock cannot request eviction from a warm owner.
+
+
+## Repeatable runner-contract v1 deployment
+
+`runner_contract: 1` is the metadata protocol. The registration `Version` string
+(such as `inference.runner.v2`) is informational and does not select a contract.
+The deployment hash includes the full digest-pinned image reference, model source
+and revision, profiles, and behavior settings. Raw metadata must fit 1,024 UTF-8 bytes.
+
+`contracts/runner-registry.lock.json` pins the shared registry source. Its native
+profile additions currently use a review branch, not a released registry tag.
+Gateways must use that same registry revision to resolve the native profiles.
+The profiles preserve candidate admission; the lock and draft review do not claim
+complete profile conformance or paid-network acceptance.
+
+```sh
+python3 scripts/fetch_runner_registry.py --destination ../runner-registry
+python3 scripts/build_capability_runtime.py --base-image <existing-image-id> \
+  --role catalog --tag comfystream-catalog:<source-commit> --record catalog-build.json
+```
+
+The build helper archives committed source only, resolves the existing base to its
+immutable local image ID, installs normally against the branch lockfile, and records
+source, registry, base, and output image identities. It does not copy model caches,
+wallets, credentials, or unrelated untracked handovers. Live builds using the legacy
+conda base pass `--venv /workspace/miniconda3/envs/comfystream` and
+`--uv-bin /workspace/miniconda3/envs/comfystream/bin/uv`. The supported build roles
+are `catalog`, `live`, `ffmpeg`, and the existing caller-stamped `swarm` publisher.
+The headless setup retains inference plugins, disables the legacy Manager startup
+logger, fixes the OpenCV loader conflict, and prevents a custom-node directory
+from shadowing the installed Python package. FFmpeg is explicitly CPU-only.
+
+`configure_capability_deployment.py --inventory host.json --output staged` renders
+Compose and catalog configuration from explicit host values. Wallet paths, account,
+RPC provider, grants, payment policy, GPU UUID, model caches, prices, and shared
+capacity IDs must belong to that host. Additional read-only model overlays are
+preserved. Secrets use explicit stack interpolation; importing an env file alone
+does not inject variables into containers. Local image IDs must be built/loaded on
+the destination; a build record does not claim the image was registry-published.
+
+For a v1 live service, set `COMFYSTREAM_RUNTIME_IMAGE`, immutable
+`COMFYSTREAM_MODEL_REVISIONS`, `COMFYSTREAM_GPU_CAPACITY_GROUP`, and the physical
+`COMFYSTREAM_WORKFLOW_GPU`. One live capacity group uses one GPU. Generic workflow
+sessions reserve the same supervisor slot as the isolated model workers and release
+it only after their executor exits. A completed workflow session receives a fresh
+executor for the next session.
+
+FAL is off by default. `--skip-batch` makes that explicit; `--enable-fal` opts into
+the legacy adapter and is excluded from this v1 rollout. Before enabling FAL under
+v1, map every provider endpoint and reviewed schema hash to actual registry
+operations and verify submit/status/result/cancel/error semantics and pricing.
+Do not substitute a native media profile for a provider queue contract.
+
+Validate captured raw discovery with `scripts/check_runner_contracts.py`. It checks
+registered UTF-8 byte size, envelope schema, registry hashes, and operation IDs;
+it does not claim inference or paid conformance. Drain work before replacement.
+`scripts/replace_capability_runner.py` consumes a host-private inspection snapshot,
+refuses stale container IDs, retains the previous image/container, and restores it
+on failed health checks. Inspection snapshots and generated create definitions
+contain credentials and stay host-local with owner-only permissions. Do not run
+two orchestrators or advertise two versions of the same capacity during cutover.

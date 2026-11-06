@@ -238,6 +238,7 @@ class FfmpegRunner:
                     "output_directory": str(Path(WORKSPACE) / "output"),
                     "disable_cuda_malloc": True,
                     "gpu_only": False,
+                    "cpu": True,
                     "preview_method": "none",
                 },
             ),
@@ -269,18 +270,17 @@ class FfmpegRunner:
             registration = await register_runner(
                 self.args.orchestrator,
                 secret=self.args.orchSecret,
-                runner_url=f"{runner}/batch/{tool}",
+                runner_url=runner if os.environ.get("COMFYSTREAM_RUNTIME_IMAGE") else f"{runner}/batch/{tool}",
                 app=f"media/ffmpeg-{tool}",
                 mode="single-shot",
                 capacity=1,
                 price=PRICE,
                 currency="usd",
                 unit="fixed",
-                label=tool,
                 metadata=registration_metadata(tool),
                 version="comfystream.ffmpeg.v1",
-                gpu=gpu,
-                auto_detect_gpu=gpu is not None,
+                gpu=None,
+                auto_detect_gpu=False,
             )
             self._registrations.append(registration)
             log.info("registered batch app=%s", f"media/ffmpeg-{tool}")
@@ -288,18 +288,17 @@ class FfmpegRunner:
             registration = await register_runner(
                 self.args.orchestrator,
                 secret=self.args.orchSecret,
-                runner_url=f"{runner}/publish",
+                runner_url=runner if os.environ.get("COMFYSTREAM_RUNTIME_IMAGE") else f"{runner}/publish",
                 app="media/ffmpeg-publish",
                 mode="single-shot",
                 capacity=1,
                 price=PRICE,
                 currency="usd",
                 unit="fixed",
-                label="ffmpeg-publish",
                 metadata=registration_metadata("publish"),
                 version="comfystream.ffmpeg.v1",
-                gpu=gpu,
-                auto_detect_gpu=gpu is not None,
+                gpu=None,
+                auto_detect_gpu=False,
             )
             self._registrations.append(registration)
             log.info("registered batch app=media/ffmpeg-publish")

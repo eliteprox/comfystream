@@ -1,0 +1,14 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG SOURCE_REVISION
+ARG REGISTRY_REVISION
+ARG SOURCE_ARCHIVE_SHA256
+ARG VENV
+ARG UV_BIN
+ARG RUNNER_ROLE
+COPY src/comfystream/runner_contract.py /app/runner_contract.py
+COPY docker/patch_swarm_contract.py /tmp/patch_swarm_contract.py
+RUN python /tmp/patch_swarm_contract.py
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION} \
+    net.eliteencoder.registry-revision=${REGISTRY_REVISION} \
+    net.eliteencoder.source-archive-sha256=${SOURCE_ARCHIVE_SHA256}

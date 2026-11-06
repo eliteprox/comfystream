@@ -1,0 +1,9 @@
+{
+  "registry_lock": 1,
+  "repository": "https://github.com/NE-Build-Track/live-runner-standard.git",
+  "revision": "3669351ce45be2c4b55236a61e641597cec79689",
+  "base_revision": "6eb406e09bc4dee16f9091634b34322c807ba0a1",
+  "review_url": "https://github.com/NE-Build-Track/live-runner-standard/pull/1",
+  "release": false,
+  "admission": "candidate"
+}
