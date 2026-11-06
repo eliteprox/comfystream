@@ -23,13 +23,47 @@ from jsonschema import ValidationError
 from comfystream.capability_client import CapabilityClient, CapacityUnavailable
 
 DEFAULT_CAPABILITIES = ("flux-image", "birefnet", "whisper", "ace-music", "triposr")
+# Catalog operation, HTTP path, registry profile, registry operationId.
+# Paths match the profile defaults, so the envelope does not repeat them.
 PROFILES = {
-    "images_generations": ("/v1/images/generations", "openai.images.v1"),
-    "audio_transcriptions": ("/v1/audio/transcriptions", "openai.audio.transcriptions.v1"),
-    "image_transformations": ("/v1/image-transformations", "gateway.image.transformations.v1"),
-    "music_generations": ("/v1/music/generations", "gateway.music.v1"),
-    "meshes_generations": ("/v1/meshes/generations", "gateway.meshes.v1"),
+    "images_generations": (
+        "/v1/images/generations",
+        "openai.images.v1",
+        "images",
+    ),
+    "audio_transcriptions": (
+        "/v1/audio/transcriptions",
+        "openai.transcriptions.v1",
+        "transcriptions",
+    ),
+    "image_transformations": (
+        "/v1/image-transformations",
+        "comfystream.image-transformations.v1",
+        "image_transformations",
+    ),
+    "music_generations": (
+        "/v1/music/generations",
+        "comfystream.music.v1",
+        "music_generations",
+    ),
+    "meshes_generations": (
+        "/v1/meshes/generations",
+        "comfystream.meshes.v1",
+        "meshes_generations",
+    ),
 }
+
+
+def deployment_revision(image, profile, model):
+    """SPEC recipe: pinned image, model source and revision, and the profile."""
+    obj = {
+        "images": [image],
+        "model": {"revision": model.get("revision"), "source": model["source"]},
+        "profiles": [profile],
+        "settings": {},
+    }
+    text = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
 def declarations(client, config):
@@ -54,24 +88,20 @@ def declarations(client, config):
             raise ValueError("An explicit positive fixed price is required")
         spec = client.catalog[name]
         operation = spec.document["operation"]
-        path, profile = PROFILES[operation]
+        path, profile, endpoint = PROFILES[operation]
+        source = spec.document["model"]["source"]
+        model = {"name": source, "source": "hf:" + source}
+        revision = spec.document["model"].get("revision")
+        if isinstance(revision, str) and revision:
+            model["revision"] = revision
+        digest = config["image"].rsplit("@", 1)[1]
         metadata = {
-            "inference_contract": 2,
-            "runner_id": settings["runner_id"],
-            "model_name": spec.document["model"]["source"],
-            "runtime": {"name": "comfystream", "image": config["image"]},
-            "deployment_revision": "sha256:"
-            + hashlib.sha256((config["image"] + ":" + spec.digest).encode()).hexdigest(),
-            "endpoints": {
-                operation: {
-                    "path": path,
-                    "profile": profile,
-                    "usage": "media.measured.v1",
-                    "stream_usage": "unsupported",
-                }
-            },
+            "runner_contract": 1,
+            "deployment_revision": deployment_revision(digest, profile, model),
+            "model": model,
+            "endpoints": {endpoint: {"profile": profile}},
+            "runtime": {"image": digest},
             "capacity_group": {"id": group, "slots": 1},
-            "admission": "candidate",
         }
         encoded = json.dumps(metadata, separators=(",", ":"))
         if len(encoded.encode()) > 1024:

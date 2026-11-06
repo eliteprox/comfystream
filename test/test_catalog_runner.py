@@ -83,8 +83,27 @@ async def test_exact_model_registrations_dispatch_sdk_shapes_and_cleanup(tmp_pat
         assert all(r["mode"] == "single-shot" and r["unit"] == "fixed" for r in registrations)
         metadata = [json.loads(r["metadata"]) for r in registrations]
         assert {m["capacity_group"]["id"] for m in metadata} == {"ada0"}
-        assert len({m["model_name"] for m in metadata}) == 5
-        assert not any("Qwen" in m["model_name"] or "Wan" in m["model_name"] for m in metadata)
+        assert {m["runner_contract"] for m in metadata} == {1}
+        assert all(len(r["metadata"].encode()) <= 1024 for r in registrations)
+        names = {m["model"]["name"] for m in metadata}
+        assert len(names) == 5
+        assert not any("Qwen" in name or "Wan" in name for name in names)
+        assert {m["runtime"]["image"] for m in metadata} == {"sha256:" + "a" * 64}
+        profiles = {
+            endpoint["profile"]
+            for item in metadata
+            for endpoint in item["endpoints"].values()
+        }
+        assert profiles == {
+            "openai.images.v1",
+            "openai.transcriptions.v1",
+            "comfystream.image-transformations.v1",
+            "comfystream.music.v1",
+            "comfystream.meshes.v1",
+        }
+        raw = [r["metadata"] for r in registrations]
+        assert all("inference_contract" not in item for item in metadata)
+        assert all("stream_usage" not in item for item in raw)
         async with aiohttp.ClientSession() as http:
             async with http.get(server.make_url("/openapi.json")) as response:
                 schema = await response.json()
