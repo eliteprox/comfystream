@@ -75,6 +75,7 @@ from comfystream.realtime.spec import (
     RealtimePipelineSpec,
     runtime_version,
 )
+from comfystream.sdk_compat import update_registration
 
 log = logging.getLogger("comfystream.realtime.worker")
 
@@ -289,6 +290,10 @@ class PipelineWorker:
 
     def registration_metadata(self) -> str:
         """Static capability fields plus the live compute state discovery should show."""
+        from comfystream.runner_contract import enabled, realtime_envelope
+
+        if enabled():
+            return realtime_envelope(self.spec, compute=self.compute, startup_s=self.estimated_startup_s())
         payload = json.loads(self.spec.metadata())
         payload["compute"] = self.compute
         payload["estimated_startup_s"] = self.estimated_startup_s()
@@ -309,7 +314,7 @@ class PipelineWorker:
         registration = self.registration
         if registration is None:
             return
-        self._spawn_background(registration.update(metadata=self.registration_metadata()))
+        self._spawn_background(update_registration(registration, metadata=self.registration_metadata()))
 
     def _set_state(self, state: str) -> None:
         previous, self.state = self.state, state
@@ -361,7 +366,7 @@ class PipelineWorker:
         if self.registration is None:
             return
         try:
-            await self.registration.update(status=status)
+            await update_registration(self.registration, status=status)
         except Exception:
             log.exception(
                 "pipeline=%s status heartbeat failed; retried next interval", self.spec.name
@@ -443,7 +448,6 @@ class PipelineWorker:
             price=self.spec.price,
             currency=self.spec.currency,
             unit=self.spec.unit,
-            label=self.spec.label,
             metadata=self.registration_metadata(),
             status=self.advertised_status,
             gpu=pinned_gpu(),
@@ -461,7 +465,6 @@ class PipelineWorker:
                 price=shot.price,
                 currency=shot.currency,
                 unit=shot.unit,
-                label=shot.label or shot.app,
                 metadata=self._single_shot_metadata(),
                 gpu=pinned_gpu(),
             )
@@ -484,6 +487,9 @@ class PipelineWorker:
             with suppress(asyncio.CancelledError):
                 await self._idle_task
         await self.end_all(STOPPED, "worker_shutdown")
+        close_backend = getattr(self.backend, "close", None)
+        if close_backend is not None:
+            await close_backend()
         if self._background:
             await asyncio.gather(*self._background, return_exceptions=True)
         if self.single_shot_registration is not None:

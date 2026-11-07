@@ -7,6 +7,8 @@ so LoadVideo and LoadAudio can see them.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import uuid
 from io import BytesIO
 from pathlib import Path
@@ -46,10 +48,22 @@ def run_job(
     job_id = uuid.uuid4().hex
     prefix = f"ffmpeg/{job_id}"
     staged = _stage(input_dir, job_id, files)
+    if tool == "metadata":
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_format", "-show_streams", "-of", "json",
+                 str(root / "input" / staged["media"])],
+                capture_output=True, timeout=30, check=True,
+            )
+            media = json.loads(probe.stdout)
+            media.get("format", {}).pop("filename", None)
+            return {"media": media}
+        except subprocess.TimeoutExpired as exc:
+            raise FfmpegJobError("metadata probe timed out", status=504) from exc
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            raise FfmpegJobError("media could not be probed", status=400) from exc
     prompt = _prompt(tool, staged, prefix, params)
     queue(prompt)
-    if tool == "metadata":
-        return {"media": {"workflow": "GetVideoComponents", "file": staged["media"]}}
     saved = _find_output(root / "output", job_id)
     if saved is None:
         raise FfmpegJobError("workflow did not write an output file", status=500)

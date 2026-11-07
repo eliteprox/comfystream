@@ -108,6 +108,7 @@ class RealtimeSupervisor:
     ):
         self.capacity = capacity or WarmCapacity()
         self.specs = {spec.name: spec for spec in specs}
+        self._external: dict[str, RealtimePipelineSpec] = {}
         boot, held = self.capacity.select([spec for spec in specs if spec.policy == "warm"])
         for name, reason in held:
             logger.info("pipeline=%s starts cold: %s", name, reason)
@@ -179,7 +180,37 @@ class RealtimeSupervisor:
             executor.shutdown(wait=wait, cancel_futures=True)
 
     def _loaded_specs(self) -> list[RealtimePipelineSpec]:
-        return [spec for spec in self.specs.values() if spec.name in self.loaded]
+        return [spec for spec in (*self.specs.values(), *self._external.values()) if spec.name in self.loaded]
+
+    async def acquire_external(self, name: str, gpu: str) -> str | None:
+        """Reserve the same admission slot for the parent workflow surface."""
+        if name in self.specs:
+            raise ValueError("External reservation collides with a managed pipeline")
+        current = self._external.get(name)
+        if current is not None and current.gpu != gpu:
+            raise ValueError("External GPU identity changed")
+        self._external[name] = RealtimePipelineSpec(
+            name=name, app="workflow-surface", backend="comfy_workflow", port=0,
+            gpu=gpu, policy="cold", capacity=1,
+        )
+        try:
+            reason = await self.acquire(name)
+        except BaseException:
+            await asyncio.shield(self.release_external(name))
+            raise
+        if reason is not None:
+            self._external.pop(name, None)
+        else:
+            self._reports[name] = (time.monotonic_ns(), "ready", 1, False)
+        self._schedule_reconcile()
+        return reason
+
+    async def release_external(self, name: str) -> None:
+        async with self._acquire_lock:
+            self.loaded.discard(name)
+            self._reports.pop(name, None)
+            self._external.pop(name, None)
+        self._schedule_reconcile()
 
     def _reserve_warm(self, spec: RealtimePipelineSpec) -> bool:
         """Whether this spawn loads at boot: a warm pipeline that still fits."""
@@ -295,7 +326,7 @@ class RealtimeSupervisor:
         ``name`` fits. The requester is reserved first, so an evicted warm
         pipeline is respawned cold instead of reloading into the freed slot.
         """
-        spec = self.specs[name]
+        spec = self.specs[name] if name in self.specs else self._external[name]
         async with self._acquire_lock:
             if name in self.loaded:
                 return None
@@ -312,6 +343,8 @@ class RealtimeSupervisor:
                 for victim in list(remaining):
                     if reason is None:
                         break
+                    if victim.name in self._external:
+                        continue
                     if not await self._request_evict(session, victim):
                         continue
                     logger.info("evicting pipeline=%s for pipeline=%s", victim.name, name)

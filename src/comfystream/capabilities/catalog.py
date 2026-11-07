@@ -8,6 +8,7 @@ import os
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -27,7 +28,11 @@ DEFAULT_UPCHARGE_BPS = 0
 DEFAULT_EXPECTED_UNITS = Decimal("1")
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_CATALOG = _REPO_ROOT / "configs" / "fal"
+_DEFAULT_CATALOG = (
+    _REPO_ROOT / "configs" / "fal"
+    if (_REPO_ROOT / "configs" / "fal").is_dir()
+    else Path(str(files("comfystream.assets").joinpath("configs", "fal")))
+)
 
 
 class CatalogError(RuntimeError):
@@ -191,9 +196,7 @@ def _load_capability(
         raise CatalogError(f"{capability} app_id must be {expected_app!r}, got {app_id!r}")
     endpoint_id = _required_string(entry.get("endpoint_id"), f"{capability}.endpoint_id")
     queue_app_id = _required_string(entry.get("queue_app_id"), f"{capability}.queue_app_id")
-    transport = _required_string(
-        entry.get("transport_profile"), f"{capability}.transport_profile"
-    )
+    transport = _required_string(entry.get("transport_profile"), f"{capability}.transport_profile")
     if transport != TRANSPORT_PROFILE:
         raise CatalogError(f"{capability} transport_profile must be {TRANSPORT_PROFILE}")
 
@@ -250,7 +253,7 @@ def _load_capability(
 
     return FalCapability(
         capability=capability,
-        app_id=app_id,
+        app_id=app_id.removeprefix("comfystream/"),
         endpoint_id=endpoint_id,
         queue_app_id=queue_app_id,
         schema_bytes=schema_bytes,

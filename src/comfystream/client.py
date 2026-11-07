@@ -1,13 +1,16 @@
 import asyncio
 import contextlib
 import logging
+import queue
 from typing import List
 
 from comfy.api.components.schema.prompt import PromptDictInput
 from comfy.cli_args_types import Configuration
 from comfy.client.embedded_comfy_client import EmbeddedComfyClient
+from comfy.distributed.process_pool_executor import ProcessPoolExecutor
+from stream_pack.channels import SessionChannels, bind_worker_channels
+from stream_pack.reset import scrub_worker
 
-from comfystream import tensor_cache
 from comfystream.exceptions import ComfyStreamInputTimeoutError
 from comfystream.utils import convert_prompt, get_default_workflow
 
@@ -17,7 +20,15 @@ logger = logging.getLogger(__name__)
 class ComfyStreamClient:
     def __init__(self, max_workers: int = 1, **kwargs):
         config = Configuration(**kwargs)
-        self.comfy_client = EmbeddedComfyClient(config, max_workers=max_workers)
+        if max_workers != 1:
+            raise ValueError("A live session owns exactly one workflow worker")
+        self._session_channels = SessionChannels()
+        self._closed = False
+        self.channels = self._session_channels.io
+        self._process_executor = ProcessPoolExecutor(
+            max_workers=1, initializer=bind_worker_channels, initargs=(self.channels,)
+        )
+        self.comfy_client = EmbeddedComfyClient(config, executor=self._process_executor)
         self.current_prompts = []
         self._cleanup_lock = asyncio.Lock()
         self._prompt_update_lock = asyncio.Lock()
@@ -102,7 +113,7 @@ class ComfyStreamClient:
                         await self._park_until_input()
                         continue
                     except Exception as e:
-                        logger.error(f"Error running prompt: {str(e)}")
+                        logger.error("Workflow execution failed")
                         logger.info("Stopping prompt execution and returning to passthrough mode")
 
                         # Stop running and switch to default passthrough workflow
@@ -112,6 +123,8 @@ class ComfyStreamClient:
             pass
 
     async def cleanup(self):
+        if self._closed:
+            return
         # Signal runner to shutdown
         self._shutdown_event.set()
         if self._runner_task:
@@ -131,6 +144,10 @@ class ComfyStreamClient:
                     logger.error(f"Error during ComfyClient cleanup: {e}")
 
             await self.cleanup_queues()
+            self._process_executor.stop()
+            await asyncio.to_thread(self._process_executor.join)
+            self._session_channels.close()
+            self._closed = True
             logger.info("Client cleanup complete")
 
     def pause_prompts(self):
@@ -160,20 +177,25 @@ class ComfyStreamClient:
             logger.debug("Prompts stopped (tasks cancelled)")
 
     async def cleanup_queues(self):
-        while not tensor_cache.image_inputs.empty():
-            tensor_cache.image_inputs.get()
+        # Clear prompt/node caches in the process that owns them, keeping model
+        # weights reusable without retaining a previous customer's frame history.
+        await self.comfy_client.clear_cache(unload_models=False)
+        self.comfy_client.history.clear()
+        await asyncio.get_running_loop().run_in_executor(self._process_executor, scrub_worker)
+        while not self.channels.image_inputs.empty():
+            self.channels.image_inputs.get()
 
-        while not tensor_cache.audio_inputs.empty():
-            tensor_cache.audio_inputs.get()
+        while not self.channels.audio_inputs.empty():
+            self.channels.audio_inputs.get()
 
-        while not tensor_cache.image_outputs.empty():
-            await tensor_cache.image_outputs.get()
+        while not self.channels.image_outputs.empty():
+            await self.channels.image_outputs.get()
 
-        while not tensor_cache.audio_outputs.empty():
-            await tensor_cache.audio_outputs.get()
+        while not self.channels.audio_outputs.empty():
+            await self.channels.audio_outputs.get()
 
-        while not tensor_cache.text_outputs.empty():
-            await tensor_cache.text_outputs.get()
+        while not self.channels.text_outputs.empty():
+            await self.channels.text_outputs.get()
 
     async def stop_prompts_immediately(self):
         """Cancel the runner task to immediately stop any in-flight prompt execution."""
@@ -187,6 +209,9 @@ class ComfyStreamClient:
     async def _fallback_to_passthrough(self):
         """Switch to default passthrough workflow when an error occurs."""
         try:
+            if self.current_prompts == [convert_prompt(get_default_workflow())]:
+                self._run_enabled_event.clear()
+                return
             # Pause the runner
             self._run_enabled_event.clear()
 
@@ -206,13 +231,14 @@ class ComfyStreamClient:
             self._run_enabled_event.clear()
 
     def put_video_input(self, frame):
-        if tensor_cache.image_inputs.full():
-            tensor_cache.image_inputs.get(block=True)
-        tensor_cache.image_inputs.put(frame)
+        if self.channels.image_inputs.full():
+            with contextlib.suppress(queue.Empty):
+                self.channels.image_inputs.get_nowait()
+        self.channels.image_inputs.put(frame)
         self._input_waiting.set()
 
     def put_audio_input(self, frame):
-        tensor_cache.audio_inputs.put(frame)
+        self.channels.audio_inputs.put(frame)
         self._input_waiting.set()
 
     async def _park_until_input(self) -> None:
@@ -222,10 +248,10 @@ class ComfyStreamClient:
         wait so an idle pipeline does not keep executing.
         """
         while self._run_enabled_event.is_set() and not self._shutdown_event.is_set():
-            if not tensor_cache.image_inputs.empty() or not tensor_cache.audio_inputs.empty():
+            if not self.channels.image_inputs.empty() or not self.channels.audio_inputs.empty():
                 return
             self._input_waiting.clear()
-            if not tensor_cache.image_inputs.empty() or not tensor_cache.audio_inputs.empty():
+            if not self.channels.image_inputs.empty() or not self.channels.audio_inputs.empty():
                 return
             try:
                 await asyncio.wait_for(self._input_waiting.wait(), timeout=0.5)
@@ -233,15 +259,15 @@ class ComfyStreamClient:
                 continue
 
     async def get_video_output(self):
-        return await tensor_cache.image_outputs.get()
+        return await self.channels.image_outputs.get()
 
     async def get_audio_output(self):
-        return await tensor_cache.audio_outputs.get()
+        return await self.channels.audio_outputs.get()
 
     async def get_text_output(self):
         try:
-            return tensor_cache.text_outputs.get_nowait()
-        except asyncio.QueueEmpty:
+            return self.channels.text_outputs.get_nowait()
+        except (asyncio.QueueEmpty, queue.Empty):
             # Expected case - queue is empty, no text available
             return None
         except Exception as e:

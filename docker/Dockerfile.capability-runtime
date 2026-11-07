@@ -1,0 +1,26 @@
+# Build with scripts/build_capability_runtime.py: its context contains only
+# committed source, never local models, credentials, or untracked handovers.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ARG VENV=/opt/venv
+ARG UV_BIN=uv
+ARG RUNNER_ROLE=catalog
+ARG SOURCE_REVISION
+ARG REGISTRY_REVISION
+ARG SOURCE_ARCHIVE_SHA256
+ENV PATH=${VENV}/bin:${PATH} \
+    PYTHONPATH=/opt/migration-source/src \
+    COMFYSTREAM_RUNNER_ROLE=${RUNNER_ROLE} \
+    COMFYSTREAM_FFMPEG_CONFIG=/opt/migration-source/configs/realtime-ffmpeg.yaml
+COPY . /opt/migration-source
+RUN test ${#SOURCE_REVISION} -eq 40 \
+    && "${UV_BIN}" pip install --python "${VENV}/bin/python" \
+       --constraint /opt/migration-source/requirements-linux-media.lock \
+       "/opt/migration-source[capabilities,media,live-runner,ffmpeg,dev]" \
+    && "${VENV}/bin/python" /opt/migration-source/docker/configure_headless_runtime.py "${RUNNER_ROLE}"
+LABEL org.opencontainers.image.revision=${SOURCE_REVISION} \
+    net.eliteencoder.registry-revision=${REGISTRY_REVISION} \
+    net.eliteencoder.source-archive-sha256=${SOURCE_ARCHIVE_SHA256}
+WORKDIR /state
+ENTRYPOINT ["comfystream-selected-runner"]
+CMD []

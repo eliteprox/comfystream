@@ -1,0 +1,155 @@
+models:
+  # Base models
+  dreamshaper-v8:
+    name: "Dreamshaper v8"
+    url: "https://civitai.com/api/download/models/128713?type=Model&format=SafeTensor&size=pruned&fp=fp16"
+    path: "checkpoints/SD1.5/dreamshaper-8.safetensors"
+    type: "checkpoint"
+
+  # DMD models
+  dreamshaper-dmd:
+    name: "Dreamshaper DMD"
+    url: "https://huggingface.co/aaronb/dreamshaper-8-dmd-1kstep/resolve/main/diffusion_pytorch_model.safetensors"
+    path: "unet/dreamshaper-8-dmd-1kstep.safetensors"
+    type: "unet"
+    extra_files:
+      - url: "https://huggingface.co/aaronb/dreamshaper-8-dmd-1kstep/raw/main/config.json"
+        path: "unet/dreamshaper-8-dmd-1kstep.json"
+
+  # Depth Anything V2 ONNX models
+  depthanything-onnx:
+    name: "DepthAnything ONNX"
+    url: "https://huggingface.co/yuvraj108c/Depth-Anything-2-Onnx/resolve/main/depth_anything_v2_vitb.onnx?download=true"
+    path: "tensorrt/depth-anything/depth_anything_vitl14.onnx"
+  depth-anything-v2-large-onnx:
+    name: "DepthAnything V2 Large ONNX"
+    url: "https://huggingface.co/yuvraj108c/Depth-Anything-2-Onnx/resolve/main/depth_anything_v2_vitl.onnx?download=true"
+    path: "tensorrt/depth-anything/depth_anything_v2_vitl.onnx"
+
+  # TAESD models
+  taesd:
+    name: "TAESD"
+    url: "https://huggingface.co/madebyollin/taesd/resolve/main/taesd_decoder.safetensors"
+    path: "vae_approx/taesd_decoder.safetensors"
+    type: "vae_approx"
+    extra_files:
+      - url: "https://huggingface.co/madebyollin/taesd/resolve/main/taesd_encoder.safetensors"
+        path: "vae_approx/taesd_encoder.safetensors"
+
+  # ControlNet models
+  controlnet-depth:
+    name: "ControlNet Depth"
+    url: "https://huggingface.co/comfyanonymous/ControlNet-v1-1_fp16_safetensors/resolve/main/control_v11f1p_sd15_depth_fp16.safetensors"
+    path: "controlnet/control_v11f1p_sd15_depth_fp16.safetensors"
+    type: "controlnet"
+
+  controlnet-mediapipe-face:
+    name: "ControlNet MediaPipe Face"
+    url: "https://huggingface.co/CrucibleAI/ControlNetMediaPipeFace/resolve/main/control_v2p_sd15_mediapipe_face.safetensors"
+    path: "controlnet/control_v2p_sd15_mediapipe_face.safetensors"
+    type: "controlnet"
+
+  # Lora models
+  ral-polygon-sd15:
+    name: "ral-polygon-sd15"
+    url: "https://huggingface.co/Livepeer-Studio/comfystream_loras/resolve/main/ral-polygon-sd15.safetensors"
+    path: "loras/SD1.5/ral-polygon-sd15.safetensors"
+    type: "lora"
+
+  ral-chrome-sdxl:
+    name: "ral-chrome-sd15"
+    url: "https://civitai.com/api/download/models/276570?type=Model&format=SafeTensor"
+    path: "loras/SD1.5/ral-chrome-sd15.safetensors"
+    type: "lora"
+
+  outfitToOutfit_v20:
+    name: "outfitToOutfit_v20"
+    url: "https://huggingface.co/EmmaJohnson311/outfitToOutfit/resolve/main/outfitToOutfit_v20_sd15.safetensors"
+    path: "controlnet/outfitToOutfit_v20.safetensors"
+    type: "controlnet"
+
+  cliptext:
+    name: "ClipTextModel"
+    url: "https://huggingface.co/Lykon/dreamshaper-8/resolve/main/text_encoder/model.fp16.safetensors"
+    path: "text_encoders/CLIPText/model.fp16.safetensors"
+    type: "text_encoder"
+
+  # JoyVASA models for ComfyUI-FasterLivePortrait
+  joyvasa_motion_generator:
+    name: "JoyVASA Motion Generator"
+    url: "https://huggingface.co/jdh-algo/JoyVASA/resolve/main/motion_generator/motion_generator_hubert_chinese.pt?download=true"
+    path: "liveportrait_onnx/joyvasa_models/motion_generator_hubert_chinese.pt"
+    type: "torch"
+
+  joyvasa_audio_model:
+    name: "JoyVASA Hubert Chinese"
+    url: "https://huggingface.co/TencentGameMate/chinese-hubert-base/resolve/main/chinese-hubert-base-fairseq-ckpt.pt?download=true"
+    path: "liveportrait_onnx/joyvasa_models/chinese-hubert-base-fairseq-ckpt.pt"
+    type: "torch"
+
+  joyvasa_motion_template:
+    name: "JoyVASA Motion Template"
+    url: "https://huggingface.co/jdh-algo/JoyVASA/resolve/main/motion_template/motion_template.pkl?download=true"
+    path: "liveportrait_onnx/joyvasa_models/motion_template.pkl"
+    type: "pickle"
+
+  # LivePortrait ONNX models - only necessary to build TRT engines
+  warping_spade:
+    name: "WarpingSpadeModel"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/warping_spade-fix.onnx?download=true"
+    path: "liveportrait_onnx/warping_spade-fix.onnx"
+    type: "onnx"
+
+  motion_extractor:
+    name: "MotionExtractorModel"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/motion_extractor.onnx?download=true"
+    path: "liveportrait_onnx/motion_extractor.onnx"
+    type: "onnx"
+
+  landmark:
+    name: "LandmarkModel"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/landmark.onnx?download=true"
+    path: "liveportrait_onnx/landmark.onnx"
+    type: "onnx"
+
+  face_analysis_retinaface:
+    name: "FaceAnalysisModel - RetinaFace"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/retinaface_det_static.onnx?download=true"
+    path: "liveportrait_onnx/retinaface_det_static.onnx"
+    type: "onnx"
+
+  face_analysis_2dpose:
+    name: "FaceAnalysisModel - 2DPose"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/face_2dpose_106_static.onnx?download=true"
+    path: "liveportrait_onnx/face_2dpose_106_static.onnx"
+    type: "onnx"
+
+  appearance_feature_extractor:
+    name: "AppearanceFeatureExtractorModel"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/appearance_feature_extractor.onnx?download=true"
+    path: "liveportrait_onnx/appearance_feature_extractor.onnx"
+    type: "onnx"
+
+  stitching:
+    name: "StitchingModel"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/stitching.onnx?download=true"
+    path: "liveportrait_onnx/stitching.onnx"
+    type: "onnx"
+
+  stitching_eye_retarget:
+    name: "StitchingModel (Eye Retargeting)"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/stitching_eye.onnx?download=true"
+    path: "liveportrait_onnx/stitching_eye.onnx"
+    type: "onnx"
+
+  stitching_lip_retarget:
+    name: "StitchingModel (Lip Retargeting)"
+    url: "https://huggingface.co/warmshao/FasterLivePortrait/resolve/main/liveportrait_onnx/stitching_lip.onnx?download=true"
+    path: "liveportrait_onnx/stitching_lip.onnx"
+    type: "onnx"
+    
+  sd-turbo:
+    name: "SD-Turbo"
+    url: "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors"
+    path: "checkpoints/SD1.5/sd_turbo.safetensors"
+    type: "checkpoint"

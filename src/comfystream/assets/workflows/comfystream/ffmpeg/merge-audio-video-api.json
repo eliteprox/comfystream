@@ -1,0 +1,13 @@
+{
+  "1": {"class_type": "LoadVideo", "inputs": {"file": "ffmpeg/video.mp4"}},
+  "2": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
+  "3": {"class_type": "LoadAudio", "inputs": {"audio": "ffmpeg/audio.bin"}},
+  "4": {
+    "class_type": "CreateVideo",
+    "inputs": {"images": ["2", 0], "fps": ["2", 2], "audio": ["3", 0]}
+  },
+  "5": {
+    "class_type": "SaveVideo",
+    "inputs": {"video": ["4", 0], "filename_prefix": "ffmpeg/merge", "format": "mp4"}
+  }
+}

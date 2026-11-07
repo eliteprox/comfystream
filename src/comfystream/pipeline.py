@@ -659,9 +659,15 @@ class Pipeline:
         Returns:
             The postprocessed video frame
         """
-        return av.VideoFrame.from_ndarray(
-            (output * 255.0).clamp(0, 255).to(dtype=torch.uint8).squeeze(0).cpu().numpy()
-        )
+        if isinstance(output, torch.Tensor):
+            output = output.detach().cpu().numpy()
+        pixels = np.asarray(output)
+        if pixels.ndim == 4 and pixels.shape[0] == 1:
+            pixels = pixels[0]
+        if pixels.ndim != 3 or pixels.shape[2] != 3:
+            raise ValueError("Video output must contain one RGB frame")
+        pixels = np.clip(pixels * 255.0, 0, 255).astype(np.uint8)
+        return av.VideoFrame.from_ndarray(np.ascontiguousarray(pixels), format="rgb24")
 
     def audio_postprocess(self, output: Union[torch.Tensor, np.ndarray]) -> av.AudioFrame:
         """Postprocess an audio frame after processing.

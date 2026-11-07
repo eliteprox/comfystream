@@ -18,7 +18,7 @@ def test_load_catalog_rewrites_app_ids_and_keeps_schema_hash():
     catalog = load_catalog(CATALOG, overlay={})
     assert len(catalog) == 73
     flux = catalog["flux-schnell"]
-    assert flux.app_id == "comfystream/fal-flux-schnell"
+    assert flux.app_id == "fal-flux-schnell"
     assert flux.endpoint_id == "fal-ai/flux/schnell"
     assert flux.unit == "fixed"
     assert flux.capacity == 4

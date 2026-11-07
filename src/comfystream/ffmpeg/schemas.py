@@ -168,6 +168,14 @@ def schema_sha256(tool: str) -> str:
 
 
 def registration_metadata(tool: str) -> str:
+    from comfystream.runner_contract import enabled, envelope
+
+    if enabled():
+        return envelope(
+            "comfystream.ffmpeg.v1", {tool.replace("-", "_"): {}},
+            settings={"tool": tool, "request_schema_sha256": schema_sha256(tool),
+                      "max_media_bytes": 64 * 1024 * 1024, "timeout_s": 180},
+        )
     document = schema_document(tool)
     kind = "ffmpeg-swarm-publish" if tool == "publish" else "ffmpeg-batch"
     metadata = json.dumps(
