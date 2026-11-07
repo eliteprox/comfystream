@@ -34,6 +34,23 @@ def main():
     else:
         archive(canonical, Path("/opt/legacy-ComfyStreamNodes"))
         canonical.symlink_to("/opt/migration-source")
+    if role == "ffmpeg":
+        # Embedded ComfyUI reimports this module for subsequent requests. The
+        # fsspec registry outlives that context, so class identity changes.
+        filesystem = packages / "comfy/component_model/package_filesystem.py"
+        old = "register_implementation(PkgResourcesFileSystem.protocol, PkgResourcesFileSystem)"
+        new = "register_implementation(PkgResourcesFileSystem.protocol, PkgResourcesFileSystem, clobber=True)"
+        text = filesystem.read_text()
+        if old not in text and new not in text:
+            raise RuntimeError("Unsupported ComfyUI filesystem registration")
+        filesystem.write_text(text.replace(old, new))
+        setup = packages / "comfy/component_model/setup.py"
+        old = "        package_filesystem.PkgResourcesFileSystem,\n    )"
+        new = "        package_filesystem.PkgResourcesFileSystem,\n        clobber=True,\n    )"
+        text = setup.read_text()
+        if old not in text and new not in text:
+            raise RuntimeError("Unsupported ComfyUI filesystem setup")
+        setup.write_text(text.replace(old, new))
     # File tools need this in grandchildren too. Other roles keep their own
     # request-specific input directories instead of forcing the FFmpeg paths.
     (packages / "comfystream-ffmpeg-paths.pth").write_text(
