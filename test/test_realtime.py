@@ -737,3 +737,22 @@ def test_multi_session_pipeline_isolates_sessions_and_blocks_eviction(monkeypatc
             assert await worker.stopped == "evicted"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+async def test_comfy_backend_close_joins_nested_pipeline():
+    from comfystream.realtime.comfy_backend import ComfyWorkflowBackend
+
+    class Pipeline:
+        closed = False
+
+        async def stop_prompts(self, cleanup=False):
+            assert cleanup
+            self.closed = True
+
+    backend = object.__new__(ComfyWorkflowBackend)
+    pipeline = backend.pipeline = Pipeline()
+    await backend.close()
+    assert pipeline.closed
+    assert backend.pipeline is None
+    await backend.close()

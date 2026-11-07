@@ -487,6 +487,9 @@ class PipelineWorker:
             with suppress(asyncio.CancelledError):
                 await self._idle_task
         await self.end_all(STOPPED, "worker_shutdown")
+        close_backend = getattr(self.backend, "close", None)
+        if close_backend is not None:
+            await close_backend()
         if self._background:
             await asyncio.gather(*self._background, return_exceptions=True)
         if self.single_shot_registration is not None:

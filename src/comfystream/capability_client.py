@@ -23,6 +23,24 @@ def _initialize_worker(gpu: str, input_dir: str, output_dir: str) -> None:
     os.environ["STREAM_PACK_OUTPUT_DIR"] = output_dir
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    # Catalog checkpoints are provisioned locally and workers run offline.
+    # Bypass download interception, whose nested import contexts can recurse.
+    from comfy import model_downloader
+    from comfy.cmd import folder_paths
+    from comfy.component_model.platform_path import construct_path
+
+    def local_lookup(folder_name, filename, *args, **kwargs):
+        paths = folder_paths._folder_names_and_paths()
+        path = paths.first_existing_or_none(folder_name, construct_path(filename))
+        if path is not None:
+            return str(path)
+        root = (Path(os.environ["COMFYUI_CWD"]) / "models" / folder_name).resolve()
+        candidate = Path(os.path.abspath(root / filename))
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return str(candidate)
+        return None
+
+    model_downloader.get_or_download = local_lookup
     # Core node exception logs can include complete node inputs. The service
     # boundary returns sanitized errors; worker logs must not retain customer data.
     logging.disable(logging.CRITICAL)

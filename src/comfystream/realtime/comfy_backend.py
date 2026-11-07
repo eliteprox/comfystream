@@ -152,6 +152,12 @@ class ComfyWorkflowBackend:
             return
         reset_session()
 
+    async def close(self) -> None:
+        """Join the nested executor before the supervisor reuses this GPU."""
+        if self.pipeline is not None:
+            await self.pipeline.stop_prompts(cleanup=True)
+            self.pipeline = None
+
     async def idle(self) -> None:
         """Stop prompt execution without unloading the pipeline."""
         if self.pipeline is not None and self.pipeline.are_prompts_running():
